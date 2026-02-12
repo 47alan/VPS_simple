@@ -40,15 +40,118 @@ log() { echo -e "\033[1;32m[OK]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[WARN]\033[0m $*"; }
 err() { echo -e "\033[1;31m[ERR]\033[0m $*"; exit 1; }
 
+prompt_with_default() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local default_value="$3"
+  local input_value=""
+  read -r -p "${prompt_text} [${default_value}]: " input_value
+  input_value="${input_value:-${default_value}}"
+  printf -v "${var_name}" '%s' "${input_value}"
+}
+
+interactive_config() {
+  if [[ ! -t 0 ]]; then
+    return
+  fi
+
+  echo
+  echo "================ 交互配置向导 ================"
+  echo "直接按回车可使用默认值（方括号内）"
+  echo "=============================================="
+  echo
+
+  local domain_default="${DOMAIN}"
+  local input_value=""
+
+  if [[ "${domain_default}" == "example.com" ]]; then
+    domain_default=""
+  fi
+
+  while true; do
+    if [[ -n "${domain_default}" ]]; then
+      read -r -p "请输入你的域名 DOMAIN [${domain_default}]: " input_value
+      input_value="${input_value:-${domain_default}}"
+    else
+      read -r -p "请输入你的域名 DOMAIN（必填）: " input_value
+    fi
+
+    if [[ -n "${input_value}" && "${input_value}" != "example.com" ]]; then
+      DOMAIN="${input_value}"
+      break
+    fi
+    warn "DOMAIN 不能为空，且不能是 example.com"
+  done
+
+  prompt_with_default "VLESS_PORT" "请输入 VLESS_PORT（VLESS 对外端口）" "${VLESS_PORT}"
+  prompt_with_default "WSPATH" "请输入 WSPATH（VLESS 的 WS 路径）" "${WSPATH}"
+
+  local hy2_domain_default="${HY2_DOMAIN}"
+  if [[ -z "${hy2_domain_default}" || "${hy2_domain_default}" == "example.com" ]]; then
+    hy2_domain_default="${DOMAIN}"
+  fi
+  prompt_with_default "HY2_DOMAIN" "请输入 HY2_DOMAIN（HY2 连接域名）" "${hy2_domain_default}"
+
+  local hy2_sni_default="${HY2_SNI}"
+  if [[ -z "${hy2_sni_default}" || "${hy2_sni_default}" == "example.com" ]]; then
+    hy2_sni_default="${HY2_DOMAIN}"
+  fi
+  prompt_with_default "HY2_SNI" "请输入 HY2_SNI（TLS SNI）" "${hy2_sni_default}"
+
+  prompt_with_default "HY2_PORT" "请输入 HY2_PORT（UDP 端口）" "${HY2_PORT}"
+  prompt_with_default "HY2_INSECURE" "请输入 HY2_INSECURE（0/1）" "${HY2_INSECURE}"
+  prompt_with_default "HY2_MASQ_URL" "请输入 HY2_MASQ_URL（伪装地址）" "${HY2_MASQ_URL}"
+
+  read -r -p "请输入 UUID（留空自动生成）: " input_value
+  if [[ -n "${input_value}" ]]; then
+    UUID="${input_value}"
+  fi
+
+  read -r -p "请输入 HY2_PASSWORD（留空自动生成）: " input_value
+  if [[ -n "${input_value}" ]]; then
+    HY2_PASSWORD="${input_value}"
+  fi
+
+  echo
+  echo "------------- 你的配置 -------------"
+  echo "DOMAIN=${DOMAIN}"
+  echo "VLESS_PORT=${VLESS_PORT}"
+  echo "WSPATH=${WSPATH}"
+  echo "HY2_DOMAIN=${HY2_DOMAIN}"
+  echo "HY2_SNI=${HY2_SNI}"
+  echo "HY2_PORT=${HY2_PORT}"
+  echo "HY2_INSECURE=${HY2_INSECURE}"
+  echo "HY2_MASQ_URL=${HY2_MASQ_URL}"
+  if [[ -n "${UUID}" ]]; then
+    echo "UUID=已设置"
+  else
+    echo "UUID=自动生成"
+  fi
+  if [[ -n "${HY2_PASSWORD}" ]]; then
+    echo "HY2_PASSWORD=已设置"
+  else
+    echo "HY2_PASSWORD=自动生成"
+  fi
+  echo "------------------------------------"
+  echo
+
+  read -r -p "确认继续安装？[Y/n]: " input_value
+  input_value="${input_value:-Y}"
+  case "${input_value}" in
+    Y|y) ;;
+    *) err "用户取消安装" ;;
+  esac
+}
+
 need_root() {
   if [[ "${EUID}" -ne 0 ]]; then
-    err "请用 root 执行：sudo DOMAIN=你的域名.com bash ./install.sh"
+    err "请用 root 执行：sudo bash ./install.sh"
   fi
 }
 
 check_domain() {
   if [[ "${DOMAIN}" == "example.com" || -z "${DOMAIN}" ]]; then
-    err "请设置域名：sudo DOMAIN=你的域名.com bash ./install.sh"
+    err "请设置域名：可直接运行脚本后按提示输入，或用 DOMAIN=你的域名.com bash ./install.sh"
   fi
   if [[ ! "${DOMAIN}" =~ ^[A-Za-z0-9.-]+$ ]]; then
     err "DOMAIN 格式不合法：${DOMAIN}"
@@ -463,6 +566,7 @@ print_summary() {
 
 main() {
   need_root
+  interactive_config
   check_domain
   check_ws_path
   check_port "VLESS_PORT" "${VLESS_PORT}"

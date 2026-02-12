@@ -32,11 +32,13 @@ cf-nginx-xray/
 
 ## 快速使用
 
+推荐：交互向导模式（一步一步输入）
+
 ```bash
-sudo DOMAIN=your-domain.com bash ./install.sh
+sudo bash ./install.sh
 ```
 
-常用可选参数：
+非交互模式（环境变量一次性传入）：
 
 ```bash
 sudo DOMAIN=example.com \
@@ -49,6 +51,8 @@ HY2_PASSWORD=yourStrongPassword \
 HY2_INSECURE=1 \
 bash ./install.sh
 ```
+
+说明：若脚本运行在非交互终端（如 CI/自动化），会自动跳过提问并使用环境变量或默认值。
 
 ## 参数说明
 
