@@ -75,6 +75,7 @@ bash ./install.sh
 - 脚本只负责 VLESS/HY2 的部署，不再开启单独的 Socks5 公网入口；
 - 建议在本地和 VPS 之间用 SSH 隧道（例如 `ssh -N -L 127.0.0.1:1080:127.0.0.1:1080 user@vps`）将远程服务映射到本地 127.0.0.1，再由浏览器/系统代理直接访问，避免暴露新端口；
 - 只要保留脚本生成的 `UUID`/`HY2_PASSWORD`，就能借助同样的 SSH 隧道复用原有接入信息。
+- 新服务器上先执行 `sudo apt update && sudo apt install -y git curl`，然后 `git clone https://github.com/47alan/VPS_simple.git` 拉取仓库并进入目录再运行 `bash install.sh`，确保所需基础工具存在。
 
 ## 输出内容
 
