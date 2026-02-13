@@ -38,7 +38,7 @@ cf-nginx-xray/
 sudo bash ./install.sh
 ```
 
-非交互模式（环境变量一次性传入）：
+非交互模式（环境变量一次性传入，HY2_PORT 默认 8443）：
 
 ```bash
 sudo DOMAIN=example.com \
@@ -46,7 +46,7 @@ VLESS_PORT=443 \
 UUID=11111111-1111-1111-1111-111111111111 \
 WSPATH=/ray \
 HY2_DOMAIN=hy2.example.com \
-HY2_PORT=443 \
+HY2_PORT=8443 \
 HY2_PASSWORD=yourStrongPassword \
 HY2_INSECURE=1 \
 bash ./install.sh
@@ -61,7 +61,7 @@ bash ./install.sh
 - `WSPATH`：VLESS 的 WS 路径，必须 `/` 开头
 - `VLESS_PORT`：VLESS 对外 TLS 端口（Nginx 监听），默认 `443`
 - `HY2_DOMAIN`：HY2 连接域名（默认跟 `DOMAIN` 一样）
-- `HY2_PORT`：HY2 UDP 端口，默认 `443`
+- `HY2_PORT`：HY2 UDP 端口，默认 `8443`
 - `HY2_PASSWORD`：HY2 密码，不填自动生成
 - `HY2_INSECURE`：HY2 客户端是否允许不验证证书，`0/1`
 
@@ -72,6 +72,9 @@ bash ./install.sh
 - 若 VLESS 走 Cloudflare 橙云，请使用 Cloudflare 支持的 HTTPS 端口（如 `443/8443` 等）。
 - HY2 走 UDP，通常建议使用 DNS only（灰云），并放行 `HY2_PORT/udp`。
 - 如果 HY2 使用 Origin 证书，客户端通常需要 `insecure=1` 或使用证书 Pin。
+- 脚本只负责 VLESS/HY2 的部署，不再开启单独的 Socks5 公网入口；
+- 建议在本地和 VPS 之间用 SSH 隧道（例如 `ssh -N -L 127.0.0.1:1080:127.0.0.1:1080 user@vps`）将远程服务映射到本地 127.0.0.1，再由浏览器/系统代理直接访问，避免暴露新端口；
+- 只要保留脚本生成的 `UUID`/`HY2_PASSWORD`，就能借助同样的 SSH 隧道复用原有接入信息。
 
 ## 输出内容
 

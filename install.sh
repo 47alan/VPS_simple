@@ -17,11 +17,10 @@ XRAY_PORT="${XRAY_PORT:-10000}"                 # 本地回环端口，Nginx 反
 # HY2 默认独立域名/端口，便于与 Cloudflare 代理策略分离
 HY2_DOMAIN="${HY2_DOMAIN:-${DOMAIN}}"           # HY2 客户端连接域名
 HY2_SNI="${HY2_SNI:-${HY2_DOMAIN}}"             # HY2 TLS SNI
-HY2_PORT="${HY2_PORT:-443}"                     # HY2 UDP 端口（可与 Nginx 的 TCP 443 共存）
+HY2_PORT="${HY2_PORT:-8443}"                    # HY2 UDP 端口
 HY2_PASSWORD="${HY2_PASSWORD:-}"                # HY2 密码，可留空自动生成
 HY2_INSECURE="${HY2_INSECURE:-1}"               # 用 CF Origin 证书时建议 1
 HY2_MASQ_URL="${HY2_MASQ_URL:-https://www.cloudflare.com/}"
-
 ORIGIN_DIR="/etc/ssl/private"
 ORIGIN_PEM="${ORIGIN_DIR}/origin.pem"
 ORIGIN_KEY="${ORIGIN_DIR}/origin.key"
@@ -39,6 +38,12 @@ HY2_CFG="/etc/hysteria/config.yaml"
 log() { echo -e "\033[1;32m[OK]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[WARN]\033[0m $*"; }
 err() { echo -e "\033[1;31m[ERR]\033[0m $*"; exit 1; }
+
+generate_openssl_password() {
+  local length="$1"
+  # 使用 openssl 生成 base64 密码并去除换行，确保与 ensure_hy2_password 保持一致
+  openssl rand -base64 "${length}" | tr -d '\r\n'
+}
 
 prompt_with_default() {
   local var_name="$1"
@@ -194,7 +199,7 @@ ensure_uuid() {
 ensure_hy2_password() {
   if [[ -z "${HY2_PASSWORD}" ]]; then
     if command -v openssl >/dev/null 2>&1; then
-      HY2_PASSWORD="$(openssl rand -base64 24 | tr -d '\r\n')"
+      HY2_PASSWORD="$(generate_openssl_password 24)"
     else
       HY2_PASSWORD="$(cat /proc/sys/kernel/random/uuid | tr -d '-' | cut -c1-20)"
     fi
@@ -346,7 +351,6 @@ install_xray() {
 
 write_xray_config() {
   mkdir -p "$(dirname "${XRAY_CFG}")"
-
   cat > "${XRAY_CFG}" <<EOF
 {
   "inbounds": [
@@ -586,7 +590,6 @@ main() {
   check_port_conflict 80 tcp
   check_port_conflict "${VLESS_PORT}" tcp
   check_port_conflict "${HY2_PORT}" udp
-
   apt_install
   systemctl enable nginx >/dev/null 2>&1 || true
   systemctl start nginx
