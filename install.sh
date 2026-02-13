@@ -54,6 +54,16 @@ generate_openssl_password() {
   openssl rand -base64 "${length}" | tr -d '\r\n'
 }
 
+generate_socks_password() {
+  local raw
+  if command -v openssl >/dev/null 2>&1; then
+    raw="$(generate_openssl_password 24 | tr -dc 'A-Za-z0-9')"
+  else
+    raw="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
+  fi
+  printf '%s\n' "${raw:0:12}"
+}
+
 get_primary_ip() {
   ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}'
 }
@@ -155,16 +165,17 @@ interactive_config() {
     if [[ -n "${input_value}" ]]; then
       SOCKS_PASS="${input_value}"
     elif [[ -z "${SOCKS_PASS}" ]]; then
-      SOCKS_PASS="$(generate_openssl_password 18 | tr -dc 'A-Za-z0-9' | head -c 12)"
+      SOCKS_PASS="$(generate_socks_password)"
     fi
 
     read -r -p "设定允许访问的 IP（留空表示任意）： " input_value
     SOCKS_ALLOW="${input_value}"
     echo
     if [[ -n "${SOCKS_ALLOW}" ]]; then
-      if ! python3 - <<'PY'
-import ipaddress, os, sys
-value = os.getenv("SOCKS_ALLOW", "")
+      if ! python3 - "${SOCKS_ALLOW}" <<'PY'
+import ipaddress
+import sys
+value = sys.argv[1]
 try:
     ipaddress.ip_network(value, strict=False)
 except Exception:
@@ -258,6 +269,26 @@ check_port() {
   fi
 }
 
+validate_socks_allow() {
+  if [[ -z "${SOCKS_ALLOW}" ]]; then
+    return
+  fi
+
+  if ! python3 - "${SOCKS_ALLOW}" <<'PY'
+import ipaddress
+import sys
+
+value = sys.argv[1]
+try:
+    ipaddress.ip_network(value, strict=False)
+except Exception:
+    sys.exit(1)
+PY
+  then
+    err "SOCKS_ALLOW 值非法：${SOCKS_ALLOW}"
+  fi
+}
+
 ensure_uuid() {
   if [[ -z "${UUID}" ]]; then
     UUID="$(cat /proc/sys/kernel/random/uuid)"
@@ -287,7 +318,7 @@ ensure_socks_creds() {
     SOCKS_USER="usr$(random_alphanum 6)"
   fi
   if [[ -z "${SOCKS_PASS}" ]]; then
-    SOCKS_PASS="$(generate_openssl_password 18 | tr -dc 'A-Za-z0-9' | head -c 12)"
+    SOCKS_PASS="$(generate_socks_password)"
   fi
   warn "SOCKS5 公网凭据：${SOCKS_USER}/${SOCKS_PASS}"
 }
@@ -743,6 +774,7 @@ main() {
   ensure_uuid
   ensure_hy2_password
   ensure_socks_creds
+  validate_socks_allow
 
   # 检查端口占用
   check_port_conflict 80 tcp
