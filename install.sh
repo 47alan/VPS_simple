@@ -21,6 +21,12 @@ HY2_PORT="${HY2_PORT:-8443}"                    # HY2 UDP 端口
 HY2_PASSWORD="${HY2_PASSWORD:-}"                # HY2 密码，可留空自动生成
 HY2_INSECURE="${HY2_INSECURE:-1}"               # 用 CF Origin 证书时建议 1
 HY2_MASQ_URL="${HY2_MASQ_URL:-https://www.cloudflare.com/}"
+SOCKS_ENABLE="${SOCKS_ENABLE:-1}"
+SOCKS_PORT="${SOCKS_PORT:-}"
+SOCKS_BIND="${SOCKS_BIND:-0.0.0.0}"
+SOCKS_USER="${SOCKS_USER:-}"
+SOCKS_PASS="${SOCKS_PASS:-}"
+SOCKS_ALLOW="${SOCKS_ALLOW:-}"
 ORIGIN_DIR="/etc/ssl/private"
 ORIGIN_PEM="${ORIGIN_DIR}/origin.pem"
 ORIGIN_KEY="${ORIGIN_DIR}/origin.key"
@@ -39,10 +45,29 @@ log() { echo -e "\033[1;32m[OK]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[WARN]\033[0m $*"; }
 err() { echo -e "\033[1;31m[ERR]\033[0m $*"; exit 1; }
 
+random_alphanum() {
+  tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$1"
+}
+
 generate_openssl_password() {
   local length="$1"
-  # 使用 openssl 生成 base64 密码并去除换行，确保与 ensure_hy2_password 保持一致
   openssl rand -base64 "${length}" | tr -d '\r\n'
+}
+
+get_primary_ip() {
+  ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}'
+}
+
+pick_random_socks_port() {
+  local tries port
+  for tries in {1..30}; do
+    port=$((50000 + RANDOM % 15000))
+    if ! ss -ltn sport = :"${port}" >/dev/null 2>&1; then
+      echo "${port}"
+      return
+    fi
+  done
+  echo 55000
 }
 
 prompt_with_default() {
@@ -106,6 +131,50 @@ interactive_config() {
   prompt_with_default "HY2_PORT" "请输入 HY2_PORT（UDP 端口）" "${HY2_PORT}"
   prompt_with_default "HY2_INSECURE" "请输入 HY2_INSECURE（0/1）" "${HY2_INSECURE}"
   prompt_with_default "HY2_MASQ_URL" "请输入 HY2_MASQ_URL（伪装地址）" "${HY2_MASQ_URL}"
+
+  read -r -p "是否启用公网 SOCKS5 出口（配合安全配置，默认启用）？[Y/n]: " input_value
+  input_value="${input_value:-Y}"
+  case "${input_value}" in
+    N|n) SOCKS_ENABLE=0 ;;
+    *) SOCKS_ENABLE=1 ;;
+  esac
+
+  if [[ "${SOCKS_ENABLE}" -eq 1 ]]; then
+    if [[ -z "${SOCKS_PORT}" ]]; then
+      SOCKS_PORT="$(pick_random_socks_port)"
+    fi
+    prompt_with_default "SOCKS_PORT" "请输入 SOCKS5 端口（50000-64999）" "${SOCKS_PORT}"
+
+    if [[ -z "${SOCKS_USER}" ]]; then
+      SOCKS_USER="usr$(random_alphanum 6)"
+    fi
+    prompt_with_default "SOCKS_USER" "请输入 SOCKS5 用户名" "${SOCKS_USER}"
+
+    read -r -s -p "请输入 SOCKS5 密码（留空自动生成 12 位）： " input_value
+    echo
+    if [[ -n "${input_value}" ]]; then
+      SOCKS_PASS="${input_value}"
+    elif [[ -z "${SOCKS_PASS}" ]]; then
+      SOCKS_PASS="$(generate_openssl_password 18 | tr -dc 'A-Za-z0-9' | head -c 12)"
+    fi
+
+    read -r -p "设定允许访问的 IP（留空表示任意）： " input_value
+    SOCKS_ALLOW="${input_value}"
+    echo
+    if [[ -n "${SOCKS_ALLOW}" ]]; then
+      if ! python3 - <<'PY'
+import ipaddress, os, sys
+value = os.getenv("SOCKS_ALLOW", "")
+try:
+    ipaddress.ip_network(value, strict=False)
+except Exception:
+    sys.exit(1)
+PY
+      then
+        err "SOCKS_ALLOW 值非法：${SOCKS_ALLOW}"
+      fi
+    fi
+  fi
 
   read -r -p "请输入 UUID（留空自动生成）: " input_value
   if [[ -n "${input_value}" ]]; then
@@ -207,6 +276,54 @@ ensure_hy2_password() {
   fi
 }
 
+ensure_socks_creds() {
+  if [[ "${SOCKS_ENABLE}" -ne 1 ]]; then
+    return
+  fi
+  if [[ -z "${SOCKS_PORT}" ]]; then
+    SOCKS_PORT="$(pick_random_socks_port)"
+  fi
+  if [[ -z "${SOCKS_USER}" ]]; then
+    SOCKS_USER="usr$(random_alphanum 6)"
+  fi
+  if [[ -z "${SOCKS_PASS}" ]]; then
+    SOCKS_PASS="$(generate_openssl_password 18 | tr -dc 'A-Za-z0-9' | head -c 12)"
+  fi
+  warn "SOCKS5 公网凭据：${SOCKS_USER}/${SOCKS_PASS}"
+}
+
+apply_socks_iptables_rules() {
+  if [[ "${SOCKS_ENABLE}" -ne 1 ]]; then
+    return
+  fi
+  if ! command -v iptables >/dev/null 2>&1; then
+    warn "iptables 不可用，无法设置 SOCKS5 连接限制"
+    return
+  fi
+
+  local chain="SOCKS5_LIM"
+  if ! iptables -nL "${chain}" >/dev/null 2>&1; then
+    iptables -N "${chain}"
+  else
+    iptables -F "${chain}"
+  fi
+
+  iptables -D INPUT -p tcp --dport "${SOCKS_PORT}" -j "${chain}" >/dev/null 2>&1 || true
+  if [[ -n "${SOCKS_ALLOW}" ]]; then
+    iptables -D INPUT -p tcp -s "${SOCKS_ALLOW}" --dport "${SOCKS_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -I INPUT -p tcp -s "${SOCKS_ALLOW}" --dport "${SOCKS_PORT}" -j ACCEPT
+  fi
+  iptables -A INPUT -p tcp --dport "${SOCKS_PORT}" -j "${chain}"
+
+  iptables -A "${chain}" -m conntrack --ctstate NEW -m recent --set --name socks5 --rsource
+  iptables -A "${chain}" -m conntrack --ctstate NEW -m recent --update --seconds 60 --hitcount 8 --name socks5 --rsource -j DROP
+  iptables -A "${chain}" -j ACCEPT
+
+  if command -v netfilter-persistent >/dev/null 2>&1; then
+    netfilter-persistent save >/dev/null 2>&1 || warn "netfilter-persistent save 失败"
+  fi
+}
+
 check_port_conflict() {
   local port="$1"
   local proto="${2:-tcp}"
@@ -275,6 +392,9 @@ apt_install() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
   apt-get install -y curl nginx ca-certificates qrencode
+  if [[ "${SOCKS_ENABLE}" -eq 1 ]]; then
+    apt-get install -y iptables-persistent netfilter-persistent
+  fi
 }
 
 write_origin_cert_interactive() {
@@ -351,6 +471,29 @@ install_xray() {
 
 write_xray_config() {
   mkdir -p "$(dirname "${XRAY_CFG}")"
+  local socks_inbound=""
+  if [[ "${SOCKS_ENABLE}" -eq 1 ]]; then
+    socks_inbound="
+    ,
+    {
+      \"tag\": \"socks-local\",
+      \"protocol\": \"socks\",
+      \"port\": ${SOCKS_PORT},
+      \"listen\": \"${SOCKS_BIND}\",
+      \"settings\": {
+        \"auth\": \"password\",
+        \"accounts\": [
+          {
+            \"user\": \"${SOCKS_USER}\",
+            \"pass\": \"${SOCKS_PASS}\"
+          }
+        ]
+      },
+      \"streamSettings\": {
+        \"network\": \"tcp\"
+      }
+    }"
+  fi
   cat > "${XRAY_CFG}" <<EOF
 {
   "inbounds": [
@@ -373,7 +516,7 @@ write_xray_config() {
           "path": "${WSPATH}"
         }
       }
-    }
+    }${socks_inbound}
   ],
   "outbounds": [
     {
@@ -498,6 +641,9 @@ optional_ufw() {
   ufw allow 80/tcp
   ufw allow "${VLESS_PORT}/tcp"
   ufw allow "${HY2_PORT}/udp"
+  if [[ "${SOCKS_ENABLE}" -eq 1 ]]; then
+    ufw allow "${SOCKS_PORT}/tcp"
+  fi
   ufw --force enable
   log "ufw 已启用，仅放行 22/tcp 80/tcp ${VLESS_PORT}/tcp ${HY2_PORT}/udp"
 }
@@ -536,6 +682,7 @@ print_summary() {
   local hy2_password_enc
   local vless_uri
   local hy2_uri
+  local socks_ip
 
   ws_path_enc="$(urlencode "${WSPATH}")"
   hy2_password_enc="$(urlencode "${HY2_PASSWORD}")"
@@ -555,6 +702,16 @@ print_summary() {
   echo "Origin PEM    : ${ORIGIN_PEM}"
   echo "Origin KEY    : ${ORIGIN_KEY}"
   echo "Nginx Conf    : ${NGINX_CONF}"
+  if [[ "${SOCKS_ENABLE}" -eq 1 ]]; then
+    socks_ip="$(get_primary_ip)"
+    echo "Socks5 本地代理：127.0.0.1:${SOCKS_PORT}（${SOCKS_USER}/${SOCKS_PASS}）"
+    echo "Socks5 公网直连：${socks_ip}:${SOCKS_PORT}（${SOCKS_USER}/${SOCKS_PASS}）"
+    if [[ -n "${SOCKS_ALLOW}" ]]; then
+      echo "SOCKS5 Allow  : ${SOCKS_ALLOW}"
+    else
+      echo "SOCKS5 Allow  : 0.0.0.0/0（任意 IP）"
+    fi
+  fi
   echo "HY2 Conf      : ${HY2_CFG}"
   echo "================================================="
   echo
@@ -585,11 +742,16 @@ main() {
 
   ensure_uuid
   ensure_hy2_password
+  ensure_socks_creds
 
   # 检查端口占用
   check_port_conflict 80 tcp
   check_port_conflict "${VLESS_PORT}" tcp
   check_port_conflict "${HY2_PORT}" udp
+  if [[ "${SOCKS_ENABLE}" -eq 1 ]]; then
+    check_port "SOCKS_PORT" "${SOCKS_PORT}"
+    check_port_conflict "${SOCKS_PORT}" tcp
+  fi
   apt_install
   systemctl enable nginx >/dev/null 2>&1 || true
   systemctl start nginx
@@ -603,6 +765,8 @@ main() {
 
   install_hysteria2
   write_hy2_config
+
+  apply_socks_iptables_rules
 
   # 可选：启用防火墙（如不需要，注释掉下一行）
   # optional_ufw
