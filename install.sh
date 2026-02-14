@@ -46,7 +46,12 @@ warn() { echo -e "\033[1;33m[WARN]\033[0m $*"; }
 err() { echo -e "\033[1;31m[ERR]\033[0m $*"; exit 1; }
 
 random_alphanum() {
-  tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$1"
+  local length="$1"
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex "$((length))" | cut -c1-"${length}"
+  else
+    cat /proc/sys/kernel/random/uuid | tr -d '-' | cut -c1-"${length}"
+  fi
 }
 
 generate_openssl_password() {
@@ -57,7 +62,7 @@ generate_openssl_password() {
 generate_socks_password() {
   local raw
   if command -v openssl >/dev/null 2>&1; then
-    raw="$(generate_openssl_password 24 | tr -dc 'A-Za-z0-9')"
+    raw="$(openssl rand -hex 8)"
   else
     raw="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
   fi
