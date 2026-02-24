@@ -53,6 +53,7 @@ SOCKS_WATCHDOG_STATE="/var/lib/socks5-watchdog/state"
 STOPPED_SERVICES=()
 INSTALL_STEP=0
 INSTALL_TOTAL_STEPS=0
+INSTALL_ERROR_REPORTED=0
 ORIGIN_DIR="/etc/ssl/private"
 ORIGIN_PEM="${ORIGIN_DIR}/origin.pem"
 ORIGIN_KEY="${ORIGIN_DIR}/origin.key"
@@ -73,15 +74,17 @@ err() { echo -e "\033[1;31m[ERR]\033[0m $*"; exit 1; }
 
 prepare_install_steps() {
   INSTALL_STEP=0
-  INSTALL_TOTAL_STEPS=5
-  if [[ "${HY2_ENABLE}" -eq 1 ]]; then
-    INSTALL_TOTAL_STEPS=$((INSTALL_TOTAL_STEPS + 1))
-  fi
+  # 基础步骤: 准备安装环境 + 写入证书 + Xray+Nginx + 输出结果
+  INSTALL_TOTAL_STEPS=4
   if [[ "${SOCKS_ENABLE}" -eq 1 ]]; then
-    INSTALL_TOTAL_STEPS=$((INSTALL_TOTAL_STEPS + 1))
+    # SOCKS5 安全预检查 + 应用 iptables 规则
+    INSTALL_TOTAL_STEPS=$((INSTALL_TOTAL_STEPS + 2))
     if [[ "${TG_NOTIFY_ENABLE}" -eq 1 ]]; then
       INSTALL_TOTAL_STEPS=$((INSTALL_TOTAL_STEPS + 1))
     fi
+  fi
+  if [[ "${HY2_ENABLE}" -eq 1 ]]; then
+    INSTALL_TOTAL_STEPS=$((INSTALL_TOTAL_STEPS + 1))
   fi
 }
 
@@ -139,6 +142,11 @@ on_install_error() {
   if [[ "${exit_code}" -eq 0 ]]; then
     return
   fi
+  if [[ "${INSTALL_ERROR_REPORTED}" -eq 1 ]]; then
+    return
+  fi
+  INSTALL_ERROR_REPORTED=1
+  trap - ERR
   echo -e "\033[1;31m[ERR]\033[0m 安装未完成：步骤 ${INSTALL_STEP}/${INSTALL_TOTAL_STEPS} 失败（line ${line_no}）" >&2
   echo -e "\033[1;31m[ERR]\033[0m 失败命令：${cmd}" >&2
   echo -e "\033[1;31m[ERR]\033[0m 可根据上方步骤号定位失败阶段后重试。" >&2
@@ -633,9 +641,9 @@ check_socks_security_status() {
     fi
   fi
 
-  if command -v iptables >/dev/null 2>&1; then
+  if command -v iptables >/dev/null 2>&1 && iptables -nL SOCKS5_LIM >/dev/null 2>&1; then
     local drop_value
-    drop_value="$(iptables -nvxL SOCKS5_LIM 2>/dev/null | awk '/DROP/ {print $1; exit}')"
+    drop_value="$(iptables -nvxL SOCKS5_LIM 2>/dev/null | awk '/DROP/ {print $1; exit}' || true)"
     if [[ "${drop_value}" =~ ^[0-9]+$ ]]; then
       drop_packets="${drop_value}"
     fi
@@ -942,9 +950,9 @@ main() {
     fi
   fi
 
-  if command -v iptables >/dev/null 2>&1; then
+  if command -v iptables >/dev/null 2>&1 && iptables -nL SOCKS5_LIM >/dev/null 2>&1; then
     local drop_value
-    drop_value="$(iptables -nvxL SOCKS5_LIM 2>/dev/null | awk '/DROP/ {print $1; exit}')"
+    drop_value="$(iptables -nvxL SOCKS5_LIM 2>/dev/null | awk '/DROP/ {print $1; exit}' || true)"
     if [[ "${drop_value}" =~ ^[0-9]+$ ]]; then
       drop_packets="${drop_value}"
     fi
@@ -1661,8 +1669,10 @@ main() {
   validate_socks_security_options
   validate_telegram_notify_options
   prepare_install_steps
-  start_install_step "执行 SOCKS5 安全预检查"
-  check_socks_security_status
+  if [[ "${SOCKS_ENABLE}" -eq 1 ]]; then
+    start_install_step "执行 SOCKS5 安全预检查"
+    check_socks_security_status
+  fi
 
   # 幂等：停止已有服务，避免重跑时端口冲突
   start_install_step "准备安装环境（停止旧服务、检测端口、安装依赖）"
