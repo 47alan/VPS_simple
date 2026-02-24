@@ -98,12 +98,16 @@ get_primary_ip() {
 }
 
 pick_random_socks_port() {
-  local tries port
+  local tries port port_info
+  if ! command -v ss >/dev/null 2>&1; then
+    err "缺少 ss 命令，无法自动挑选 SOCKS5 端口"
+  fi
   for tries in {1..30}; do
     port=$((50000 + RANDOM % 15000))
-    if ! ss -ltn sport = :"${port}" >/dev/null 2>&1; then
+    port_info="$(ss -ltnH "sport = :${port}" 2>/dev/null || true)"
+    if [[ -z "${port_info}" ]]; then
       echo "${port}"
-      return
+      return 0
     fi
   done
   err "无法在 50000-64999 范围内找到可用端口（尝试 30 次均失败）"
