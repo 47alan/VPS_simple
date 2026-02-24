@@ -98,6 +98,8 @@ bash ./install.sh
 - 脚本会在执行前输出 SOCKS5 安全检测（连接数、来源 IP、iptables 丢弃计数），并记录到 `SOCKS_SECURITY_LOG_FILE`；单次异常记为弱告警，历史窗口（默认 10 分钟）达到阈值记为强告警。
 - 若设置 `SOCKS_REQUIRE_ATTACK_BEFORE_RESET=1`，仅在检测到疑似攻击/他人使用时继续。
 - 若启用 `TG_NOTIFY_ENABLE=1`，脚本会自动配置 `socks5-watchdog.timer`，按 `SOCKS_WATCHDOG_INTERVAL_SECONDS` 周期检测并推送告警到 Telegram（支持自定义 `TG_API_BASE_URL`）。
+- 安装过程会显示 `>>> [步骤 x/y]` 进度；正常结束会显示“`安装完成标记：INSTALL_DONE=1`”和服务运行状态检查结果。
+- 交互模式下 Telegram Bot Token 改为明文输入（不再隐藏字符），便于确认输入内容。
 - 启用 SOCKS5 时如需启用 UFW 防火墙，可取消 `install.sh` 中 `optional_ufw` 的注释，该函数会同时放行 SOCKS5 端口；`iptables` 规则会由 `netfilter-persistent` 持久化（见 `SOCKS5_HARDENING.md`）。
 - 建议在本地和 VPS 之间用 SSH 隧道（例如 `ssh -N -L 127.0.0.1:1080:127.0.0.1:1080 user@vps`）将远程服务映射到本地 127.0.0.1，避免直接暴露 SOCKS5，除非你确实需要公网访问；
 - 只要保留脚本生成的 `UUID`/`HY2_PASSWORD`，就能借助 SSH 隧道复用原有接入信息。

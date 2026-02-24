@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 # =========================
 # One-click: Nginx + Xray(VLESS WS) + Hysteria2 + Cloudflare Origin Cert
@@ -51,6 +51,8 @@ SOCKS_WATCHDOG_SERVICE="/etc/systemd/system/socks5-watchdog.service"
 SOCKS_WATCHDOG_TIMER="/etc/systemd/system/socks5-watchdog.timer"
 SOCKS_WATCHDOG_STATE="/var/lib/socks5-watchdog/state"
 STOPPED_SERVICES=()
+INSTALL_STEP=0
+INSTALL_TOTAL_STEPS=0
 ORIGIN_DIR="/etc/ssl/private"
 ORIGIN_PEM="${ORIGIN_DIR}/origin.pem"
 ORIGIN_KEY="${ORIGIN_DIR}/origin.key"
@@ -68,6 +70,79 @@ HY2_CFG="/etc/hysteria/config.yaml"
 log() { echo -e "\033[1;32m[OK]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[WARN]\033[0m $*"; }
 err() { echo -e "\033[1;31m[ERR]\033[0m $*"; exit 1; }
+
+prepare_install_steps() {
+  INSTALL_STEP=0
+  INSTALL_TOTAL_STEPS=5
+  if [[ "${HY2_ENABLE}" -eq 1 ]]; then
+    INSTALL_TOTAL_STEPS=$((INSTALL_TOTAL_STEPS + 1))
+  fi
+  if [[ "${SOCKS_ENABLE}" -eq 1 ]]; then
+    INSTALL_TOTAL_STEPS=$((INSTALL_TOTAL_STEPS + 1))
+    if [[ "${TG_NOTIFY_ENABLE}" -eq 1 ]]; then
+      INSTALL_TOTAL_STEPS=$((INSTALL_TOTAL_STEPS + 1))
+    fi
+  fi
+}
+
+start_install_step() {
+  local message="$1"
+  INSTALL_STEP=$((INSTALL_STEP + 1))
+  echo
+  echo ">>> [步骤 ${INSTALL_STEP}/${INSTALL_TOTAL_STEPS}] ${message}"
+}
+
+print_runtime_status() {
+  local all_ok=1
+
+  echo
+  echo "================ 运行状态检查 ================"
+  for svc in nginx xray; do
+    if systemctl is-active --quiet "${svc}" 2>/dev/null; then
+      echo "${svc}                 : active"
+    else
+      echo "${svc}                 : inactive"
+      all_ok=0
+    fi
+  done
+
+  if [[ "${HY2_ENABLE}" -eq 1 ]]; then
+    if systemctl is-active --quiet hysteria-server 2>/dev/null; then
+      echo "hysteria-server       : active"
+    else
+      echo "hysteria-server       : inactive"
+      all_ok=0
+    fi
+  fi
+
+  if [[ "${SOCKS_ENABLE}" -eq 1 && "${TG_NOTIFY_ENABLE}" -eq 1 ]]; then
+    if systemctl is-active --quiet socks5-watchdog.timer 2>/dev/null; then
+      echo "socks5-watchdog.timer : active"
+    else
+      echo "socks5-watchdog.timer : inactive"
+      all_ok=0
+    fi
+  fi
+  echo "=============================================="
+
+  if [[ "${all_ok}" -eq 1 ]]; then
+    log "安装完成标记：INSTALL_DONE=1（核心服务已启动）"
+  else
+    warn "安装流程已走完，但存在未运行服务，请执行 systemctl status <service> 排查。"
+  fi
+}
+
+on_install_error() {
+  local exit_code="$1"
+  local line_no="$2"
+  local cmd="$3"
+  if [[ "${exit_code}" -eq 0 ]]; then
+    return
+  fi
+  echo -e "\033[1;31m[ERR]\033[0m 安装未完成：步骤 ${INSTALL_STEP}/${INSTALL_TOTAL_STEPS} 失败（line ${line_no}）" >&2
+  echo -e "\033[1;31m[ERR]\033[0m 失败命令：${cmd}" >&2
+  echo -e "\033[1;31m[ERR]\033[0m 可根据上方步骤号定位失败阶段后重试。" >&2
+}
 
 random_alphanum() {
   local length="$1"
@@ -238,7 +313,7 @@ PY
     if [[ "${TG_NOTIFY_ENABLE}" -eq 1 ]]; then
       prompt_with_default "TG_CHAT_ID" "请输入 Telegram Chat ID" "${TG_CHAT_ID}"
 
-      read -r -s -p "请输入 Telegram Bot Token（留空沿用已有值）: " input_value
+      read -r -p "请输入 Telegram Bot Token（明文输入，留空沿用已有值）: " input_value
       echo
       if [[ -n "${input_value}" ]]; then
         TG_BOT_TOKEN="${input_value}"
@@ -1559,6 +1634,7 @@ print_summary() {
 }
 
 main() {
+  trap 'on_install_error $? ${LINENO} "${BASH_COMMAND}"' ERR
   trap 'restore_stopped_services_on_failure $?' EXIT
   need_root
   interactive_config
@@ -1584,9 +1660,12 @@ main() {
   validate_socks_allow
   validate_socks_security_options
   validate_telegram_notify_options
+  prepare_install_steps
+  start_install_step "执行 SOCKS5 安全预检查"
   check_socks_security_status
 
   # 幂等：停止已有服务，避免重跑时端口冲突
+  start_install_step "准备安装环境（停止旧服务、检测端口、安装依赖）"
   local svc_list=(nginx xray)
   if [[ "${HY2_ENABLE}" -eq 1 ]]; then
     svc_list+=(hysteria-server)
@@ -1613,28 +1692,44 @@ main() {
   systemctl enable nginx >/dev/null 2>&1 || true
   systemctl start nginx
 
+  start_install_step "写入伪装站点并配置证书"
   setup_nginx_index
   write_origin_cert_interactive
 
+  start_install_step "安装并配置 Xray + Nginx"
   install_xray
   write_xray_config
   write_nginx_conf
 
   if [[ "${HY2_ENABLE}" -eq 1 ]]; then
+    start_install_step "安装并配置 Hysteria2"
     install_hysteria2
     write_hy2_config
   else
     log "已跳过 Hysteria2 安装（HY2_ENABLE=0）"
   fi
 
-  apply_socks_iptables_rules
-  configure_socks_watchdog
+  if [[ "${SOCKS_ENABLE}" -eq 1 ]]; then
+    start_install_step "应用 SOCKS5 防护规则（iptables）"
+    apply_socks_iptables_rules
+    if [[ "${TG_NOTIFY_ENABLE}" -eq 1 ]]; then
+      start_install_step "启用 Telegram 告警 Watchdog"
+      configure_socks_watchdog
+    else
+      configure_socks_watchdog
+    fi
+  else
+    configure_socks_watchdog
+  fi
 
   # 可选：启用防火墙（如不需要，注释掉下一行）
   # optional_ufw
 
+  start_install_step "输出安装结果与运行状态"
   print_summary
+  print_runtime_status
   STOPPED_SERVICES=()
+  trap - ERR
   trap - EXIT
   log "全部完成。VLESS/HY2 链接与二维码已输出。"
 }
