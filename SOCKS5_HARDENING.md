@@ -21,9 +21,12 @@
 
 ## 4. ✅ 脚本集成（`install.sh`）
 
-- 本项目的 `install.sh` 扩展了 SOCKS5 安全配置：只要设置 `SOCKS_ENABLE=1`，安装流程会自动生成一个 50000-64999 的高位端口，并创建强用户名/密码（长度约 12 位）。
+- 本项目的 `install.sh` 扩展了 SOCKS5 安全配置：`SOCKS_ENABLE` 默认是 `0`（不开放公网 SOCKS5）；只要设置 `SOCKS_ENABLE=1`，安装流程会自动生成一个 50000-64999 的高位端口，并创建强用户名/密码（长度约 12 位）。
 - SOCKS5 端口、用户名、密码也可以通过 `SOCKS_PORT`/`SOCKS_USER`/`SOCKS_PASS` 环境变量预先指定；若希望限制连接来源，可使用 `SOCKS_ALLOW` 传入可信 IP 或网段。
-- 启用后脚本会在 `write_xray_config` 中附加一个 SOCKS inbound，并在 `apply_socks_iptables_rules` 中创建 `SOCKS5_LIM` 链，限制每个 IP 每 60 秒最多建立 8 条新连接，超过即丢弃。
+- 启用后脚本会在 `write_xray_config` 中附加一个 SOCKS inbound（`"udp": false`，仅 TCP），并在 `apply_socks_iptables_rules` 中创建 `SOCKS5_LIM` 链，限制每个 IP 每 60 秒最多建立 20 条新连接，超过即丢弃（`--hitcount` 受 `xt_recent` 内核模块 `ip_pkt_list_tot` 上限约束，默认通常为 20）。
+- 脚本会在执行前运行 `check_socks_security_status`，输出当前连接数、来源 IP 数量、连接最多来源、`SOCKS5_LIM` 丢弃计数，并写入 `SOCKS_SECURITY_LOG_FILE`；单次异常会标记为弱告警，最近 `600` 秒内告警次数达到 `2` 次会升级为强告警。
+- 若你希望“只有检测到异常才继续重置/修改”，可设置 `SOCKS_REQUIRE_ATTACK_BEFORE_RESET=1`。
+- 若你不想手动看日志，可设置 `TG_NOTIFY_ENABLE=1` 并提供 `TG_BOT_TOKEN` / `TG_CHAT_ID`，脚本会自动启用 `socks5-watchdog.timer` 周期检测并推送到 Telegram（`TG_API_BASE_URL` 可替换为自建电报服务器地址）。
 - `SOCKS_ALLOW` 会通过 `python3` 校验 IP/CIDR；若输入格式错误脚本会报错并提示，避免后续 iptables 命令崩溃。
 - 如果 VPS 防火墙或云安全组未放行该端口，即使脚本生成了 proxy 监听也无法被公网访问，服务器的安全性不会因此下降。
 - 安装完成后，脚本会在终端输出样例 `Socks5 本地代理：127.0.0.1:10808（usrA3xK2/aBcDeFgH1234）` 和 `Socks5 公网直连：203.0.113.55:10808（usrA3xK2/aBcDeFgH1234）`，可以直接复制到代理设置或分享给客户端。
@@ -36,10 +39,12 @@ SOCKS_PORT=32187
 iptables -N SOCKS5_LIM
 iptables -A INPUT -p tcp --dport "${SOCKS_PORT}" -j SOCKS5_LIM
 iptables -A SOCKS5_LIM -m conntrack --ctstate NEW -m recent --set --name socks5 --rsource
-iptables -A SOCKS5_LIM -m conntrack --ctstate NEW -m recent --update --seconds 60 --hitcount 10 --name socks5 --rsource -j DROP
+iptables -A SOCKS5_LIM -m conntrack --ctstate NEW -m recent --update --seconds 60 --hitcount 20 --name socks5 --rsource -j DROP
 iptables -A SOCKS5_LIM -j ACCEPT
 ```
-- 规则说明：每个源 IP 每 60 秒最多新建 10 个连接；超过后直接丢弃，阻断暴力扫描和横向扩展。
+- 规则说明：每个源 IP 每 60 秒最多新建 20 个连接；超过后直接丢弃，阻断暴力扫描和横向扩展。
+- `--hitcount` 值受 `xt_recent` 内核参数 `ip_pkt_list_tot`（默认 20）限制。若设置的值超过该上限，规则将永远不会触发。如需更高阈值，请先执行 `echo 100 > /proc/net/xt_recent/ip_pkt_list_tot`。
+- 若用于比特浏览器等多开场景，建议通过 `SOCKS_ALLOW` 设置你的客户端 IP 白名单，白名单 IP 会跳过限速直接放行。
 
 ## 6. ✅ 基本抗扫描
 
