@@ -17,10 +17,16 @@ Const CREATE_SITE = "0"
 Const SYSTEM_UPGRADE = "1"
 Const INSTALL_3XUI = "0"
 Const INSTALL_CLIPROXY = "0"
+Const INSTALL_SKRBTSO = "0"
 Const XUI_DIR = "/opt/3x-ui"
 Const XUI_CONTAINER_NAME = "3xui_app"
+Const XUI_DOMAIN = ""
 Const CLI_PROXY_DIR = "/opt/cli-proxy-api"
 Const CLI_PROXY_BIND_IP = "127.0.0.1"
+Const CLI_PROXY_DOMAIN = ""
+Const SKRBTSO_DOMAIN = ""
+Const SSL_CERT_PATH = ""
+Const SSL_KEY_PATH = ""
 
 ' Optional first site. Leave empty to initialize reverse proxy only.
 Const DOMAIN = ""
@@ -37,6 +43,7 @@ Sub Main()
               "SYSTEM_UPGRADE='" & SYSTEM_UPGRADE & "' " & _
               "INSTALL_3XUI='" & INSTALL_3XUI & "' " & _
               "INSTALL_CLIPROXY='" & INSTALL_CLIPROXY & "' " & _
+              "INSTALL_SKRBTSO='" & INSTALL_SKRBTSO & "' " & _
               "XUI_DIR='" & XUI_DIR & "' " & _
               "XUI_CONTAINER_NAME='" & XUI_CONTAINER_NAME & "' " & _
               "CLI_PROXY_DIR='" & CLI_PROXY_DIR & "' " & _
@@ -48,6 +55,26 @@ Sub Main()
 
     If UPSTREAM <> "" Then
         envPart = envPart & " UPSTREAM='" & UPSTREAM & "'"
+    End If
+
+    If XUI_DOMAIN <> "" Then
+        envPart = envPart & " XUI_DOMAIN='" & XUI_DOMAIN & "'"
+    End If
+
+    If CLI_PROXY_DOMAIN <> "" Then
+        envPart = envPart & " CLI_PROXY_DOMAIN='" & CLI_PROXY_DOMAIN & "'"
+    End If
+
+    If SKRBTSO_DOMAIN <> "" Then
+        envPart = envPart & " SKRBTSO_DOMAIN='" & SKRBTSO_DOMAIN & "'"
+    End If
+
+    If SSL_CERT_PATH <> "" Then
+        envPart = envPart & " SSL_CERT_PATH='" & SSL_CERT_PATH & "'"
+    End If
+
+    If SSL_KEY_PATH <> "" Then
+        envPart = envPart & " SSL_KEY_PATH='" & SSL_KEY_PATH & "'"
     End If
 
     Dim cmd

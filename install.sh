@@ -17,6 +17,7 @@ XUI_CONTAINER_NAME="${XUI_CONTAINER_NAME:-3xui_app}"
 XUI_PANEL_PORT="${XUI_PANEL_PORT:-2053}"
 XUI_INFO_FILE="${XUI_INFO_FILE:-}"
 XUI_STOP_LEGACY="${XUI_STOP_LEGACY:-ask}"
+XUI_DOMAIN="${XUI_DOMAIN:-}"
 
 CLI_PROXY_DIR="${CLI_PROXY_DIR:-/opt/cli-proxy-api}"
 CLI_PROXY_IMAGE="${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:latest}"
@@ -26,6 +27,7 @@ CLI_PROXY_API_PORT="${CLI_PROXY_API_PORT:-8317}"
 CLI_PROXY_EXTRA_PORTS="${CLI_PROXY_EXTRA_PORTS:-8085 1455 54545 51121 11451}"
 CLI_PROXY_API_KEY="${CLI_PROXY_API_KEY:-}"
 CLI_PROXY_MANAGEMENT_SECRET="${CLI_PROXY_MANAGEMENT_SECRET:-}"
+CLI_PROXY_DOMAIN="${CLI_PROXY_DOMAIN:-}"
 
 SKRBTSO_DIR="${SKRBTSO_DIR:-/opt/skrbtso-helper}"
 SKRBTSO_REPO_URL="${SKRBTSO_REPO_URL:-https://github.com/47alan/skrbtso-helper.git}"
@@ -109,9 +111,11 @@ Docker Nginx 反向代理一键脚本
   XUI_PANEL_PORT=2053
   XUI_INFO_FILE=/opt/3x-ui/install-info.txt
   XUI_STOP_LEGACY=ask
+  XUI_DOMAIN=xui.example.com
   CLI_PROXY_DIR=/opt/cli-proxy-api
   CLI_PROXY_BIND_IP=127.0.0.1
   CLI_PROXY_API_PORT=8317
+  CLI_PROXY_DOMAIN=api.example.com
   SKRBTSO_DIR=/opt/skrbtso-helper
   SKRBTSO_DOMAIN=helper.example.com
   SSL_CERT_PATH=/path/to/fullchain.pem
@@ -126,6 +130,8 @@ Docker Nginx 反向代理一键脚本
   sudo bash ./install.sh install
   sudo bash ./install.sh install-3x-ui
   sudo bash ./install.sh install-cli-proxy
+  sudo XUI_DOMAIN=xui.example.com bash ./install.sh install-3x-ui
+  sudo CLI_PROXY_DOMAIN=api.example.com bash ./install.sh install-cli-proxy
   sudo SKRBTSO_DOMAIN=helper.example.com bash ./install.sh install-skrbtso
   sudo DOMAIN=example.com UPSTREAM=app-container:8080 bash ./install.sh add-site
 EOF
@@ -463,6 +469,126 @@ ensure_network() {
   log "Docker 网络已创建：${NETWORK_NAME}"
 }
 
+prompt_component_domain_if_needed() {
+  local domain_var="$1"
+  local component_label="$2"
+  local example_domain="$3"
+  local current_domain="${!domain_var}"
+
+  if [[ -n "${current_domain}" || ! -t 0 ]]; then
+    return
+  fi
+
+  local answer=""
+  read -r -p "是否为 ${component_label} 配置 HTTPS 域名反代？[y/N]: " answer
+  case "${answer}" in
+    y|Y|yes|YES)
+      prompt_value "${domain_var}" "请输入 ${component_label} 域名，例如 ${example_domain}"
+      ;;
+  esac
+}
+
+connect_container_to_proxy_network_if_needed() {
+  local container_name="$1"
+  local component_label="$2"
+
+  if ! docker ps -a --format '{{.Names}}' | grep -Fxq "${container_name}"; then
+    warn "${component_label} 容器不存在，无法加入反代网络：${container_name}"
+    return
+  fi
+
+  if docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{println $name}}{{end}}' "${container_name}" | grep -Fxq "${NETWORK_NAME}"; then
+    log "${component_label} 已接入 Docker 网络：${NETWORK_NAME}"
+    return
+  fi
+
+  docker network connect "${NETWORK_NAME}" "${container_name}" >/dev/null
+  log "${component_label} 已接入 Docker 网络：${NETWORK_NAME}"
+}
+
+xui_reverse_proxy_upstream() {
+  local gateway=""
+  if [[ -f "$(compose_file)" ]] && grep -q 'host.docker.internal:host-gateway' "$(compose_file)"; then
+    if ! container_running || docker exec "${CONTAINER_NAME}" getent hosts host.docker.internal >/dev/null 2>&1; then
+      printf 'host.docker.internal:%s\n' "${XUI_PANEL_PORT}"
+      return
+    fi
+  fi
+
+  gateway="$(docker network inspect "${NETWORK_NAME}" -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
+  if [[ -n "${gateway}" && "${gateway}" != "<no value>" ]]; then
+    printf '%s:%s\n' "${gateway}" "${XUI_PANEL_PORT}"
+    return
+  fi
+
+  printf 'host.docker.internal:%s\n' "${XUI_PANEL_PORT}"
+}
+
+configure_component_reverse_proxy() {
+  local component_label="$1"
+  local domain_var="$2"
+  local upstream_value="$3"
+  local domain_value="${!domain_var}"
+
+  if [[ -z "${domain_value}" ]]; then
+    warn "未设置 ${component_label} 反代域名，已跳过 Nginx HTTPS 站点配置"
+    return
+  fi
+  if [[ ! -f "$(compose_file)" ]]; then
+    warn "未找到 Nginx 反代 Compose 文件，请先安装基础环境 + Nginx 反代，再为 ${component_label} 配置域名"
+    return
+  fi
+
+  domain_value="$(normalize_domain "${domain_value}")"
+  validate_domain "${domain_value}"
+  printf -v "${domain_var}" '%s' "${domain_value}"
+
+  DOMAIN="${domain_value}"
+  UPSTREAM="${upstream_value}"
+  local original_ssl_cert_path="${SSL_CERT_PATH}"
+  local original_ssl_key_path="${SSL_KEY_PATH}"
+  write_site_config
+  SSL_CERT_PATH="${original_ssl_cert_path}"
+  SSL_KEY_PATH="${original_ssl_key_path}"
+
+  if [[ "${SITE_CONFIG_ACTIVE}" -eq 1 ]]; then
+    if container_running; then
+      reload_nginx
+    else
+      start_proxy
+    fi
+  else
+    warn "${component_label} HTTPS 站点未启用：缺少证书或证书路径未提供"
+  fi
+}
+
+configure_xui_reverse_proxy() {
+  if [[ -z "${XUI_DOMAIN}" ]]; then
+    warn "未设置 XUI_DOMAIN，已跳过 Nginx HTTPS 站点配置"
+    return
+  fi
+  if [[ ! -f "$(compose_file)" ]]; then
+    warn "未找到 Nginx 反代 Compose 文件，请先安装基础环境 + Nginx 反代，再为 3x-ui 配置域名"
+    return
+  fi
+
+  ensure_network
+  local upstream_value
+  upstream_value="$(xui_reverse_proxy_upstream)"
+  if [[ "${upstream_value}" != host.docker.internal:* ]]; then
+    warn "当前反代 Compose 未配置 host.docker.internal，已使用 Docker 网络网关作为 3x-ui 上游：${upstream_value}"
+  fi
+  configure_component_reverse_proxy "3x-ui" "XUI_DOMAIN" "${upstream_value}"
+}
+
+configure_cli_proxy_reverse_proxy() {
+  configure_component_reverse_proxy "CLIProxyAPI" "CLI_PROXY_DOMAIN" "${CLI_PROXY_CONTAINER_NAME}:${CLI_PROXY_API_PORT}"
+}
+
+configure_skrbtso_reverse_proxy() {
+  configure_component_reverse_proxy "SkrBTSo Helper" "SKRBTSO_DOMAIN" "${SKRBTSO_CONTAINER_NAME}:${SKRBTSO_PORT}"
+}
+
 ensure_xui_layout() {
   mkdir -p "${XUI_DIR}/db" "${XUI_DIR}/cert"
   chmod 755 "${XUI_DIR}" "${XUI_DIR}/db" "${XUI_DIR}/cert"
@@ -588,6 +714,7 @@ install_xui() {
   validate_flag INSTALL_DOCKER "${INSTALL_DOCKER}"
   validate_flag OVERWRITE "${OVERWRITE}"
   validate_port XUI_PANEL_PORT "${XUI_PANEL_PORT}"
+  prompt_component_domain_if_needed "XUI_DOMAIN" "3x-ui 面板" "xui.example.com"
 
   local existing_db=0
   if [[ -s "${XUI_DIR}/db/x-ui.db" ]]; then
@@ -603,6 +730,7 @@ install_xui() {
 
   log "3x-ui 容器已启动：${XUI_CONTAINER_NAME}"
   check_xui_container_health
+  configure_xui_reverse_proxy
   write_xui_install_info "${existing_db}"
   print_xui_summary "${existing_db}"
 }
@@ -653,6 +781,13 @@ ${ports}
       - ./config.yaml:/CLIProxyAPI/config.yaml
       - ./auths:/root/.cli-proxy-api
       - ./logs:/CLIProxyAPI/logs
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
+    name: ${NETWORK_NAME}
 EOF
   chmod 644 "$(cli_proxy_compose_file)"
 }
@@ -707,15 +842,19 @@ install_cli_proxy() {
   validate_flag INSTALL_DOCKER "${INSTALL_DOCKER}"
   validate_flag OVERWRITE "${OVERWRITE}"
   validate_port CLI_PROXY_API_PORT "${CLI_PROXY_API_PORT}"
+  prompt_component_domain_if_needed "CLI_PROXY_DOMAIN" "CLIProxyAPI" "api.example.com"
 
   run_system_upgrade_once
   install_docker_engine
+  ensure_network
   ensure_cli_proxy_layout
   write_cli_proxy_config
   write_cli_proxy_compose_file
   cli_proxy_compose_cmd up -d
+  connect_container_to_proxy_network_if_needed "${CLI_PROXY_CONTAINER_NAME}" "CLIProxyAPI"
 
   log "CLIProxyAPI 容器已启动：${CLI_PROXY_CONTAINER_NAME}"
+  configure_cli_proxy_reverse_proxy
   print_cli_proxy_summary
 }
 
@@ -725,8 +864,10 @@ update_cli_proxy() {
   if [[ ! -f "$(cli_proxy_compose_file)" ]]; then
     err "未找到 CLIProxyAPI Compose 文件：$(cli_proxy_compose_file)，请先执行 install-cli-proxy"
   fi
+  ensure_network
   cli_proxy_compose_cmd pull
   cli_proxy_compose_cmd up -d
+  connect_container_to_proxy_network_if_needed "${CLI_PROXY_CONTAINER_NAME}" "CLIProxyAPI"
   log "CLIProxyAPI 镜像已更新并重启"
 }
 
@@ -851,47 +992,11 @@ EOF
   chmod 644 "$(skrbtso_compose_file)"
 }
 
-configure_skrbtso_reverse_proxy() {
-  if [[ -z "${SKRBTSO_DOMAIN}" ]]; then
-    warn "未设置 SKRBTSO_DOMAIN，已跳过 Nginx HTTPS 站点配置"
-    return
-  fi
-  if [[ ! -f "$(compose_file)" ]]; then
-    warn "未找到 Nginx 反代 Compose 文件，请先安装基础环境 + Nginx 反代"
-    return
-  fi
-
-  SKRBTSO_DOMAIN="$(normalize_domain "${SKRBTSO_DOMAIN}")"
-  validate_domain "${SKRBTSO_DOMAIN}"
-  DOMAIN="${SKRBTSO_DOMAIN}"
-  UPSTREAM="${SKRBTSO_SERVICE_NAME}:${SKRBTSO_PORT}"
-  write_site_config
-
-  if [[ "${SITE_CONFIG_ACTIVE}" -eq 1 ]]; then
-    if container_running; then
-      reload_nginx
-    else
-      start_proxy
-    fi
-  else
-    warn "SkrBTSo Helper HTTPS 站点未启用：缺少证书或证书路径未提供"
-  fi
-}
-
 install_skrbtso() {
   validate_flag INSTALL_DOCKER "${INSTALL_DOCKER}"
   validate_flag OVERWRITE "${OVERWRITE}"
   validate_port SKRBTSO_PORT "${SKRBTSO_PORT}"
-
-  if [[ -t 0 && -z "${SKRBTSO_DOMAIN}" ]]; then
-    local answer=""
-    read -r -p "是否为 SkrBTSo Helper 配置 HTTPS 域名反代？[y/N]: " answer
-    case "${answer}" in
-      y|Y|yes|YES)
-        prompt_value SKRBTSO_DOMAIN "请输入 helper 域名，例如 helper.example.com"
-        ;;
-    esac
-  fi
+  prompt_component_domain_if_needed "SKRBTSO_DOMAIN" "SkrBTSo Helper" "helper.example.com"
 
   run_system_upgrade_once
   install_docker_engine
@@ -902,6 +1007,7 @@ install_skrbtso() {
   write_skrbtso_env_file
   write_skrbtso_compose_file
   skrbtso_compose_cmd up -d --build
+  connect_container_to_proxy_network_if_needed "${SKRBTSO_CONTAINER_NAME}" "SkrBTSo Helper"
   log "SkrBTSo Helper 容器已启动：${SKRBTSO_CONTAINER_NAME}"
   configure_skrbtso_reverse_proxy
   print_skrbtso_summary
@@ -915,7 +1021,9 @@ update_skrbtso() {
   if [[ ! -f "$(skrbtso_compose_file)" ]]; then
     err "未找到 SkrBTSo Helper Compose 文件：$(skrbtso_compose_file)，请先执行 install-skrbtso"
   fi
+  ensure_network
   skrbtso_compose_cmd up -d --build
+  connect_container_to_proxy_network_if_needed "${SKRBTSO_CONTAINER_NAME}" "SkrBTSo Helper"
   log "SkrBTSo Helper 已更新并重启"
 }
 
@@ -934,6 +1042,8 @@ services:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./ssl:/etc/nginx/ssl:ro
       - ./logs:/var/log/nginx
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - proxy
 
@@ -1481,10 +1591,14 @@ write_xui_install_info() {
     return
   fi
 
-  local server_ip url_host panel_url account password note
+  local server_ip url_host panel_url reverse_proxy_url account password note
   server_ip="$(detect_server_ip)"
   url_host="$(format_url_host "${server_ip}")"
   panel_url="http://${url_host}:${XUI_PANEL_PORT}"
+  reverse_proxy_url="未配置"
+  if [[ -n "${XUI_DOMAIN}" ]]; then
+    reverse_proxy_url="https://${XUI_DOMAIN}/你的面板路径/"
+  fi
 
   account="admin"
   password="admin"
@@ -1500,6 +1614,7 @@ write_xui_install_info() {
 生成时间: $(date '+%Y-%m-%d %H:%M:%S %z')
 
 面板登录地址: ${panel_url}
+Nginx 反代地址: ${reverse_proxy_url}
 面板端口: ${XUI_PANEL_PORT}
 用户名: ${account}
 密码: ${password}
@@ -1512,17 +1627,21 @@ Compose 文件: ${XUI_DIR}/docker-compose.yml
 证书目录: ${XUI_DIR}/cert
 
 说明: ${note}
-端口放行: 如果要从公网访问面板，请按当前面板端口手动放行本机防火墙和云安全组的 TCP ${XUI_PANEL_PORT}。
+端口放行: 如果通过 Nginx 反代访问，建议只开放 80/tcp 和 443/tcp；如果要直连面板，再按当前面板端口手动放行 TCP ${XUI_PANEL_PORT}。
 EOF
   chmod 600 "${info_file}"
 }
 
 print_xui_summary() {
   local existing_db="${1:-0}"
-  local server_ip url_host panel_url info_file account password note
+  local server_ip url_host panel_url reverse_proxy_url info_file account password note
   server_ip="$(detect_server_ip)"
   url_host="$(format_url_host "${server_ip}")"
   panel_url="http://${url_host}:${XUI_PANEL_PORT}"
+  reverse_proxy_url="未配置"
+  if [[ -n "${XUI_DOMAIN}" ]]; then
+    reverse_proxy_url="https://${XUI_DOMAIN}/你的面板路径/"
+  fi
   info_file="$(xui_info_file)"
 
   account="admin"
@@ -1545,6 +1664,7 @@ Compose 文件  : ${XUI_DIR}/docker-compose.yml
 证书目录      : ${XUI_DIR}/cert
 网络模式      : host
 面板登录地址  : ${panel_url}
+Nginx 反代地址 : ${reverse_proxy_url}
 面板端口      : ${XUI_PANEL_PORT}
 用户名        : ${account}
 密码          : ${password}
@@ -1552,7 +1672,8 @@ Compose 文件  : ${XUI_DIR}/docker-compose.yml
 
 重要事项:
   ${note}
-  如果打不开登录地址，请按当前面板端口手动放行本机防火墙和云安全组的 TCP ${XUI_PANEL_PORT}。
+  如果使用 Nginx 反代，3x-ui 面板证书路径可以留空，由 Nginx 负责 HTTPS。
+  如果直连打不开登录地址，请按当前面板端口手动放行本机防火墙和云安全组的 TCP ${XUI_PANEL_PORT}。
   3x-ui 使用 host 网络，面板端口和你在面板里创建的入站端口都直接占用宿主机端口。
 
 常用命令:
@@ -1565,6 +1686,11 @@ EOF
 }
 
 print_cli_proxy_summary() {
+  local reverse_proxy_url="未配置"
+  if [[ -n "${CLI_PROXY_DOMAIN}" ]]; then
+    reverse_proxy_url="https://${CLI_PROXY_DOMAIN}/"
+  fi
+
   cat <<EOF
 
 ================== CLIPROXYAPI ==================
@@ -1576,12 +1702,14 @@ Compose 文件  : ${CLI_PROXY_DIR}/docker-compose.yml
 认证目录      : ${CLI_PROXY_DIR}/auths
 日志目录      : ${CLI_PROXY_DIR}/logs
 API 监听      : http://${CLI_PROXY_BIND_IP}:${CLI_PROXY_API_PORT}
+Nginx 反代地址 : ${reverse_proxy_url}
 额外端口      : ${CLI_PROXY_EXTRA_PORTS}
 API Key       : ${CLI_PROXY_API_KEY}
 
 重要事项:
   默认绑定 ${CLI_PROXY_BIND_IP}，不会直接暴露到公网。
-  如果要公网访问，设置 CLI_PROXY_BIND_IP=0.0.0.0，并同步放行云防火墙或安全组。
+  如果使用 Nginx 反代，建议只开放 80/tcp 和 443/tcp，不需要把 API 端口直接暴露公网。
+  如果要公网直连访问，设置 CLI_PROXY_BIND_IP=0.0.0.0，并同步放行云防火墙或安全组。
   容器 restart: unless-stopped，Docker 服务 enable 后会随系统开机自动启动。
 
 常用命令:

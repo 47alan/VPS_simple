@@ -7,6 +7,9 @@ Const INSTALL_URL = "https://raw.githubusercontent.com/47alan/VPS_simple/main/in
 
 Const XUI_DIR = "/opt/3x-ui"
 Const XUI_CONTAINER_NAME = "3xui_app"
+Const XUI_DOMAIN = ""
+Const SSL_CERT_PATH = ""
+Const SSL_KEY_PATH = ""
 
 Sub Main()
     xsh.Screen.Synchronous = True
@@ -14,6 +17,18 @@ Sub Main()
     Dim envPart
     envPart = "XUI_DIR='" & XUI_DIR & "' " & _
               "XUI_CONTAINER_NAME='" & XUI_CONTAINER_NAME & "'"
+
+    If XUI_DOMAIN <> "" Then
+        envPart = envPart & " XUI_DOMAIN='" & XUI_DOMAIN & "'"
+    End If
+
+    If SSL_CERT_PATH <> "" Then
+        envPart = envPart & " SSL_CERT_PATH='" & SSL_CERT_PATH & "'"
+    End If
+
+    If SSL_KEY_PATH <> "" Then
+        envPart = envPart & " SSL_KEY_PATH='" & SSL_KEY_PATH & "'"
+    End If
 
     Dim cmd
     cmd = "set -e; " & _

@@ -8,6 +8,9 @@ Const INSTALL_URL = "https://raw.githubusercontent.com/47alan/VPS_simple/main/in
 Const CLI_PROXY_DIR = "/opt/cli-proxy-api"
 Const CLI_PROXY_BIND_IP = "127.0.0.1"
 Const CLI_PROXY_API_PORT = "8317"
+Const CLI_PROXY_DOMAIN = ""
+Const SSL_CERT_PATH = ""
+Const SSL_KEY_PATH = ""
 
 Sub Main()
     xsh.Screen.Synchronous = True
@@ -16,6 +19,18 @@ Sub Main()
     envPart = "CLI_PROXY_DIR='" & CLI_PROXY_DIR & "' " & _
               "CLI_PROXY_BIND_IP='" & CLI_PROXY_BIND_IP & "' " & _
               "CLI_PROXY_API_PORT='" & CLI_PROXY_API_PORT & "'"
+
+    If CLI_PROXY_DOMAIN <> "" Then
+        envPart = envPart & " CLI_PROXY_DOMAIN='" & CLI_PROXY_DOMAIN & "'"
+    End If
+
+    If SSL_CERT_PATH <> "" Then
+        envPart = envPart & " SSL_CERT_PATH='" & SSL_CERT_PATH & "'"
+    End If
+
+    If SSL_KEY_PATH <> "" Then
+        envPart = envPart & " SSL_KEY_PATH='" & SSL_KEY_PATH & "'"
+    End If
 
     Dim cmd
     cmd = "set -e; " & _

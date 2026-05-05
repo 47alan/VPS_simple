@@ -122,6 +122,15 @@ curl -fsSL https://raw.githubusercontent.com/47alan/VPS_simple/main/install.sh -
 sudo bash /tmp/reverse-proxy-install.sh install-3x-ui
 ```
 
+如果这台服务器已经安装了 Nginx 反代，执行 `install-3x-ui` 时脚本会询问是否为 3x-ui 面板配置 HTTPS 域名反代。也可以直接用环境变量提前写好域名和证书路径：
+
+```bash
+sudo XUI_DOMAIN=xui.example.com \
+SSL_CERT_PATH=/root/certs/fullchain.pem \
+SSL_KEY_PATH=/root/certs/privkey.pem \
+bash /tmp/reverse-proxy-install.sh install-3x-ui
+```
+
 安装结束后，脚本会在 Xshell 终端显示 3x-ui 面板登录地址、用户名和密码，并保存到：
 
 ```text
@@ -136,6 +145,20 @@ Docker 全新数据目录的默认账号和密码是 `admin` / `admin`。如果 
 
 安装和更新后，脚本会检查 3x-ui 容器状态和最近日志。如果发现 `bind: address already in use`，会直接提示冲突端口，并给出 `ss -lntp | grep ':端口'` 的排查命令。
 
+如果要用 Nginx 反代访问 3x-ui 面板，推荐安装组件时填写 `XUI_DOMAIN`。也可以后续手动添加站点。3x-ui 使用 host 网络，反代上游写宿主机地址：
+
+```bash
+sudo DOMAIN=xui.example.com UPSTREAM=host.docker.internal:2053 bash ./install.sh add-site
+```
+
+证书放在 `/opt/reverse-proxy/ssl/xui.example.com/fullchain.pem` 和 `/opt/reverse-proxy/ssl/xui.example.com/privkey.pem`，或执行 `add-site` 时用 `SSL_CERT_PATH`、`SSL_KEY_PATH` 指定证书真实路径。反代成功后访问：
+
+```text
+https://xui.example.com/你的面板路径/
+```
+
+这种方式下，3x-ui 面板证书路径可以留空，由 Nginx 负责 HTTPS。云安全组建议只开放 `80/tcp` 和 `443/tcp`，不要把 `2053/tcp` 对公网开放。
+
 只安装 CLIProxyAPI：
 
 ```bash
@@ -146,6 +169,17 @@ sudo bash /tmp/reverse-proxy-install.sh install-cli-proxy
 
 CLIProxyAPI 默认安装到 `/opt/cli-proxy-api`，镜像为 `eceasy/cli-proxy-api:latest`，默认只绑定 `127.0.0.1:8317`，不会直接暴露到公网。需要公网访问时设置 `CLI_PROXY_BIND_IP=0.0.0.0`，同时放行云防火墙或安全组。
 
+如果这台服务器已经安装了 Nginx 反代，执行 `install-cli-proxy` 时脚本会询问是否为 CLIProxyAPI 配置 HTTPS 域名反代。也可以直接指定：
+
+```bash
+sudo CLI_PROXY_DOMAIN=api.example.com \
+SSL_CERT_PATH=/root/certs/fullchain.pem \
+SSL_KEY_PATH=/root/certs/privkey.pem \
+bash /tmp/reverse-proxy-install.sh install-cli-proxy
+```
+
+使用反代时，CLIProxyAPI 容器会接入 `proxy-net`，Nginx 上游会写成 `cli-proxy-api:8317`。这种方式建议只开放 `80/tcp` 和 `443/tcp`，不需要把 `8317/tcp` 对公网开放。
+
 只安装 SkrBTSo Helper：
 
 ```bash
@@ -154,7 +188,7 @@ curl -fsSL https://raw.githubusercontent.com/47alan/VPS_simple/main/install.sh -
 sudo bash /tmp/reverse-proxy-install.sh install-skrbtso
 ```
 
-如果要同时给 SkrBTSo Helper 配置 HTTPS 反代，可以先安装 Nginx 反代，再指定域名和证书路径：
+如果要同时给 SkrBTSo Helper 配置 HTTPS 反代，可以先安装 Nginx 反代。执行 `install-skrbtso` 时脚本会询问域名，也可以直接指定域名和证书路径：
 
 ```bash
 sudo SKRBTSO_DOMAIN=helper.example.com \
@@ -244,7 +278,10 @@ bash ./install.sh add-site
 app-container:8080
 http://app-container:8080
 https://app-container:8443
+host.docker.internal:2053
 ```
+
+其中 `host.docker.internal:2053` 适合反代宿主机端口，例如 Docker 版 3x-ui 的面板端口。
 
 如果执行 `add-site` 时证书还不存在，脚本只会生成：
 
@@ -292,11 +329,17 @@ Const CREATE_SITE = "0"
 Const SYSTEM_UPGRADE = "1"
 Const INSTALL_3XUI = "0"
 Const INSTALL_CLIPROXY = "0"
+Const INSTALL_SKRBTSO = "0"
 Const DOMAIN = ""
 Const UPSTREAM = ""
+Const XUI_DOMAIN = ""
+Const CLI_PROXY_DOMAIN = ""
+Const SKRBTSO_DOMAIN = ""
+Const SSL_CERT_PATH = ""
+Const SSL_KEY_PATH = ""
 ```
 
-`INSTALL_3XUI="0"`、`INSTALL_CLIPROXY="0"` 表示只安装反代基础环境。你如果要安装 3x-ui 或 CLIProxyAPI，推荐用菜单单独选择，或运行对应的 `xshell_3xui_install.vbs`、`xshell_cli_proxy_install.vbs`。
+`INSTALL_3XUI="0"`、`INSTALL_CLIPROXY="0"`、`INSTALL_SKRBTSO="0"` 表示只安装反代基础环境。你如果要安装组件，推荐用菜单单独选择，或运行对应的组件 VBS。组件 VBS 里可以填写 `XUI_DOMAIN`、`CLI_PROXY_DOMAIN`、`SKRBTSO_DOMAIN` 和证书真实绝对路径。
 
 如果你希望第一次安装时顺便创建站点，可以改成：
 
@@ -355,6 +398,7 @@ docker logs -f reverse-proxy
 
 ```bash
 sudo bash ./install.sh install-3x-ui
+sudo XUI_DOMAIN=xui.example.com bash ./install.sh install-3x-ui
 sudo bash ./install.sh update-3x-ui
 sudo bash ./install.sh 3x-ui-status
 sudo bash ./install.sh 3x-ui-down
@@ -367,6 +411,7 @@ CLIProxyAPI 常用命令：
 
 ```bash
 sudo bash ./install.sh install-cli-proxy
+sudo CLI_PROXY_DOMAIN=api.example.com bash ./install.sh install-cli-proxy
 sudo bash ./install.sh update-cli-proxy
 sudo bash ./install.sh cli-proxy-status
 sudo bash ./install.sh cli-proxy-down
@@ -377,6 +422,7 @@ SkrBTSo Helper 常用命令：
 
 ```bash
 sudo bash ./install.sh install-skrbtso
+sudo SKRBTSO_DOMAIN=helper.example.com bash ./install.sh install-skrbtso
 sudo bash ./install.sh update-skrbtso
 sudo bash ./install.sh skrbtso-status
 sudo bash ./install.sh skrbtso-down
@@ -407,11 +453,13 @@ sudo bash ./setup-ssh-key-login.sh help
 | `XUI_PANEL_PORT` | `2053` | 3x-ui 默认面板端口 |
 | `XUI_INFO_FILE` | `/opt/3x-ui/install-info.txt` | 3x-ui 安装结果保存路径 |
 | `XUI_STOP_LEGACY` | `ask` | 发现宿主机版旧 3x-ui 时是否停用：`ask`、`1`、`0` |
+| `XUI_DOMAIN` | 空 | 3x-ui 面板的 HTTPS 反代域名 |
 | `INSTALL_CLIPROXY` | `0` | `install` 时是否同时安装 CLIProxyAPI |
 | `CLI_PROXY_DIR` | `/opt/cli-proxy-api` | CLIProxyAPI Compose 项目目录 |
 | `CLI_PROXY_IMAGE` | `eceasy/cli-proxy-api:latest` | CLIProxyAPI Docker 镜像 |
 | `CLI_PROXY_BIND_IP` | `127.0.0.1` | CLIProxyAPI 宿主机绑定地址 |
 | `CLI_PROXY_API_PORT` | `8317` | CLIProxyAPI API 端口 |
+| `CLI_PROXY_DOMAIN` | 空 | CLIProxyAPI 的 HTTPS 反代域名 |
 | `INSTALL_SKRBTSO` | `0` | `install` 时是否同时安装 SkrBTSo Helper |
 | `SKRBTSO_DIR` | `/opt/skrbtso-helper` | SkrBTSo Helper Compose 项目目录 |
 | `SKRBTSO_DOMAIN` | 空 | SkrBTSo Helper 的 HTTPS 反代域名 |
