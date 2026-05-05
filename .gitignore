@@ -1,21 +1,28 @@
-# 证书与私钥
+# Local environment
+.env
+.env.*
+
+# TLS private material
 *.pem
 *.key
 *.crt
-*.cer
+*.csr
 *.p12
 *.pfx
+id_rsa
+id_ed25519
+id_ecdsa
+*.ppk
 
-# 环境与本地配置
-.env
-.env.*
-*.local
-
-# 临时与日志
-*.log
-*.tmp
+# Backups and runtime output
 *.bak
+*.bak.*
+*.tar.gz
+reverse-proxy-backup*.tgz
+logs/
 
-# 系统文件
+# Editor and OS files
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/

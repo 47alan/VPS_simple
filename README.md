@@ -1,118 +1,395 @@
-# cf-nginx-xray
+# Docker Nginx 反向代理一键部署
 
-一个面向 Ubuntu/Debian 的一键部署脚本，快速搭建：
+这是一套全新的 Docker Nginx 反向代理初始化脚本，用于在 Ubuntu/Debian 新服务器上快速创建统一入口：
 
-- `Nginx + Xray(VLESS + WS + TLS)`
-- `Hysteria2 (HY2)`
-- 安装完成自动输出 VLESS/HY2 导入链接和终端二维码
+- 反代项目目录：`/opt/reverse-proxy`
+- 反代容器：`reverse-proxy`
+- Docker 网络：`proxy-net`
+- 站点配置目录：`/opt/reverse-proxy/nginx/conf.d`
+- 证书目录：`/opt/reverse-proxy/ssl`
+- 日志目录：`/opt/reverse-proxy/logs`
+- 3x-ui 目录：`/opt/3x-ui`
+- CLIProxyAPI 目录：`/opt/cli-proxy-api`
+- SSH 公钥登录脚本：`setup-ssh-key-login.sh`
 
-适合个人自建节点场景，强调“少步骤、可复制、可快速导入”。
+脚本用于 Ubuntu 24.04 VPS 初始配置：系统更新升级、Docker、Nginx 反代、可选 3x-ui、可选 CLIProxyAPI，以及独立的 SSH 公钥登录配置。
 
-> 仅用于合法合规用途，请遵守你所在地区及服务提供商的相关规定。
-
-- VLESS 导入链接
-- HY2 导入链接
-- 两者终端二维码（基于 `qrencode`）
-
-## 目录结构
-
-```text
-cf-nginx-xray/
-├─ .gitignore
-├─ install.sh
-└─ README.md
-```
+所有容器均使用 `restart: unless-stopped`，脚本会执行 `systemctl enable --now docker`，服务器重启后 Docker 服务和这些容器会自动启动。
 
 ## 环境要求
 
-- Ubuntu / Debian（推荐全新系统）
+- Ubuntu 24.04 / Debian
 - Root 权限
+- 服务器可访问外网，用于安装 Docker 和拉取容器镜像
 - 域名已解析到服务器 IP
-- 可访问外网（用于在线安装 Xray/Hysteria2）
+- SSL 证书已准备好，或后续手动放入指定目录
 
-## 快速使用
+## Ubuntu 24.04 一条命令安装反代
 
-推荐：交互向导模式（一步一步输入）
+把仓库发布到 GitHub 后，可以在每台 VPS 上执行同一条命令。下面的 URL 按当前仓库示例写成 `47alan/VPS_simple`，如果你的仓库地址不同，需要替换成自己的 raw 地址。
 
-```bash
-sudo bash ./install.sh
-```
+如果你不想上传到 GitHub，跳过这一节，直接看“本地文件上传到 VPS”。
 
-非交互模式（环境变量一次性传入，HY2_PORT 默认 8443）：
+如果你想自己选择安装内容，推荐进入菜单：
 
 ```bash
-sudo DOMAIN=example.com \
-VLESS_PORT=443 \
-UUID=11111111-1111-1111-1111-111111111111 \
-WSPATH=/ray \
-HY2_DOMAIN=hy2.example.com \
-HY2_PORT=8443 \
-HY2_PASSWORD=yourStrongPassword \
-HY2_INSECURE=1 \
-bash ./install.sh
+sudo apt-get update -y && sudo apt-get install -y curl ca-certificates && \
+curl -fsSL https://raw.githubusercontent.com/47alan/VPS_simple/main/install.sh -o /tmp/reverse-proxy-install.sh && \
+sudo bash /tmp/reverse-proxy-install.sh menu
 ```
 
-说明：若脚本运行在非交互终端（如 CI/自动化），会自动跳过提问并使用环境变量或默认值。
+菜单里可以按序号选择：
+
+- 安装基础环境 + Nginx 反代
+- 安装 3x-ui
+- 安装 CLIProxyAPI
+- 全套安装
+- 添加 HTTPS 反代站点
+- 查看状态、更新镜像
+- 停止/卸载容器，默认保留配置和数据
+
+```bash
+sudo apt-get update -y && sudo apt-get install -y curl ca-certificates && \
+curl -fsSL https://raw.githubusercontent.com/47alan/VPS_simple/main/install.sh -o /tmp/reverse-proxy-install.sh && \
+sudo bash /tmp/reverse-proxy-install.sh install
+```
+
+这条命令适合你在 Xshell 登录服务器后直接粘贴执行。脚本会自动安装 Docker、创建反代目录、创建 `proxy-net` 网络并启动 Nginx 容器。
+
+脚本内部会先执行系统初始化更新：
+
+```bash
+apt-get update -y
+apt-get upgrade -y
+apt-get autoremove -y
+```
+
+如果某台机器不想升级系统包，可以设置 `SYSTEM_UPGRADE=0`。
+
+## 本地文件上传到 VPS
+
+如果脚本只保存在你的电脑本地，不上传 GitHub，推荐把文件上传到服务器目录后运行。
+
+方式一：用 Xftp 上传：
+
+1. 在服务器上建目录：
+   ```bash
+   mkdir -p /root/vps-init
+   ```
+2. 用 Xftp 把这些文件上传到 `/root/vps-init`：
+   ```text
+   install.sh
+   setup-ssh-key-login.sh
+   README.md
+   说明.md
+   ```
+3. 在 Xshell 里运行：
+   ```bash
+   cd /root/vps-init
+   chmod +x install.sh setup-ssh-key-login.sh
+   sudo bash ./install.sh menu
+   ```
+
+方式二：用本仓库的 PowerShell 上传脚本：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\upload_to_vps.ps1 -HostName 你的服务器IP -User root -Port 22
+```
+
+上传完成后，在 Xshell 里运行：
+
+```bash
+cd /root/vps-init
+sudo bash ./install.sh menu
+```
+
+如果 SSH 不是 22 端口，把 `-Port 22` 改成你的实际端口。
+
+## Ubuntu 24.04 一条命令安装全套容器
+
+3x-ui 使用官方 Docker 镜像 `ghcr.io/mhsanaei/3x-ui:latest`，独立安装在 `/opt/3x-ui`，使用 `network_mode: host`。默认面板地址通常是：
+
+```text
+http://服务器IP:2053
+```
+
+一条命令安装反代、3x-ui 和 CLIProxyAPI：
+
+```bash
+sudo apt-get update -y && sudo apt-get install -y curl ca-certificates && \
+curl -fsSL https://raw.githubusercontent.com/47alan/VPS_simple/main/install.sh -o /tmp/reverse-proxy-install.sh && \
+sudo INSTALL_3XUI=1 INSTALL_CLIPROXY=1 bash /tmp/reverse-proxy-install.sh install
+```
+
+只安装 3x-ui：
+
+```bash
+sudo apt-get update -y && sudo apt-get install -y curl ca-certificates && \
+curl -fsSL https://raw.githubusercontent.com/47alan/VPS_simple/main/install.sh -o /tmp/reverse-proxy-install.sh && \
+sudo bash /tmp/reverse-proxy-install.sh install-3x-ui
+```
+
+首次登录后必须立即修改默认账号、默认密码、面板路径和面板端口。3x-ui 使用 host 网络，你在面板里创建的入站端口会直接占用宿主机端口，需要同步放行云防火墙或安全组。
+
+只安装 CLIProxyAPI：
+
+```bash
+sudo apt-get update -y && sudo apt-get install -y curl ca-certificates && \
+curl -fsSL https://raw.githubusercontent.com/47alan/VPS_simple/main/install.sh -o /tmp/reverse-proxy-install.sh && \
+sudo bash /tmp/reverse-proxy-install.sh install-cli-proxy
+```
+
+CLIProxyAPI 默认安装到 `/opt/cli-proxy-api`，镜像为 `eceasy/cli-proxy-api:latest`，默认只绑定 `127.0.0.1:8317`，不会直接暴露到公网。需要公网访问时设置 `CLI_PROXY_BIND_IP=0.0.0.0`，同时放行云防火墙或安全组。
+
+## SSH 公钥登录
+
+服务器初始化时建议先添加公钥，确认私钥登录可用后，再关闭密码登录。
+
+添加公钥，保持密码登录：
+
+```bash
+sudo apt-get update -y && sudo apt-get install -y curl ca-certificates && \
+curl -fsSL https://raw.githubusercontent.com/47alan/VPS_simple/main/setup-ssh-key-login.sh -o /tmp/setup-ssh-key-login.sh && \
+sudo SSH_USER=root SSH_PUBLIC_KEY='ssh-ed25519 AAAA...你的公钥...' bash /tmp/setup-ssh-key-login.sh
+```
+
+修改 SSH 端口，默认保留旧端口一起监听，避免锁死：
+
+```bash
+sudo SSH_USER=root SSH_PORT=22222 SSH_PUBLIC_KEY='ssh-ed25519 AAAA...你的公钥...' bash /tmp/setup-ssh-key-login.sh
+```
+
+确认新 Xshell 会话可以用私钥和新端口登录后，再关闭密码登录并移除旧端口：
+
+```bash
+sudo SSH_USER=root SSH_PORT=22222 KEEP_OLD_SSH_PORT=0 DISABLE_PASSWORD_LOGIN=1 SSH_PUBLIC_KEY='ssh-ed25519 AAAA...你的公钥...' bash /tmp/setup-ssh-key-login.sh
+```
+
+端口注意事项：
+
+- 不要关闭当前 Xshell 窗口，先新开窗口测试。
+- 如果设置了 `SSH_PORT`，要先在云厂商安全组放行该 TCP 端口。
+- `KEEP_OLD_SSH_PORT=1` 会同时保留旧端口和新端口。
+- `DISABLE_PASSWORD_LOGIN=1` 只应在确认私钥登录成功后使用。
+
+## 本地脚本初始化
+
+```bash
+sudo bash ./install.sh install
+```
+
+脚本会自动完成：
+
+- 安装 Docker Engine 和 Docker Compose 插件（如果系统尚未安装）
+- 创建 `/opt/reverse-proxy` 标准目录
+- 创建 Docker 网络 `proxy-net`
+- 写入 `docker-compose.yml`
+- 写入 Nginx 主配置
+- 写入一个安全的 HTTP 默认站点 `00-default.conf`
+- 启动 `reverse-proxy` 容器
+
+## 添加一个 HTTPS 反代站点
+
+先放置证书，目录名必须和域名一致：
+
+```bash
+sudo mkdir -p /opt/reverse-proxy/ssl/example.com
+sudo cp fullchain.pem /opt/reverse-proxy/ssl/example.com/fullchain.pem
+sudo cp privkey.pem /opt/reverse-proxy/ssl/example.com/privkey.pem
+sudo chmod 644 /opt/reverse-proxy/ssl/example.com/fullchain.pem
+sudo chmod 600 /opt/reverse-proxy/ssl/example.com/privkey.pem
+```
+
+再生成站点配置并重载 Nginx：
+
+```bash
+sudo DOMAIN=example.com UPSTREAM=app-container:8080 bash ./install.sh add-site
+```
+
+`UPSTREAM` 可以写成：
+
+```text
+app-container:8080
+http://app-container:8080
+https://app-container:8443
+```
+
+如果执行 `add-site` 时证书还不存在，脚本只会生成：
+
+```text
+/opt/reverse-proxy/nginx/conf.d/example.com.conf.disabled
+```
+
+这样不会让 Nginx 因证书缺失而启动失败。证书放好后重新执行 `add-site` 即可生成正式的 `.conf`。
+
+## 新服务器非交互安装
+
+```bash
+sudo PROJECT_DIR=/opt/reverse-proxy \
+DOMAIN=example.com \
+UPSTREAM=app-container:8080 \
+CREATE_SITE=1 \
+bash ./install.sh install
+```
+
+如果证书已经在 `/opt/reverse-proxy/ssl/example.com/` 下，脚本会直接创建启用的 HTTPS 配置；否则会创建 `.conf.disabled` 模板。
+
+## Xshell 脚本管理器
+
+仓库提供多个 Xshell VBS 模板：
+
+- `scripts/xshell_vps_menu.vbs`：下载脚本并打开数字菜单
+- `scripts/xshell_reverse_proxy_install.vbs`：初始化一台 Ubuntu 24.04 VPS
+- `scripts/xshell_3xui_install.vbs`：只安装 3x-ui Docker 容器
+- `scripts/xshell_cli_proxy_install.vbs`：只安装 CLIProxyAPI Docker 容器
+- `scripts/xshell_setup_ssh_key_login.vbs`：配置 SSH 公钥登录、端口和密码登录策略
+- `scripts/xshell_reverse_proxy_add_site.vbs`：给已初始化的服务器添加一个 HTTPS 反代站点
+
+使用步骤：
+
+1. 打开 VBS 文件，把 `INSTALL_URL` 改成你自己的 GitHub raw 地址。
+2. 在 Xshell 连接到目标服务器。
+3. 打开“脚本管理器”，新建或编辑一个 `.vbs` 脚本。
+4. 粘贴对应 VBS 内容并运行。
+
+初始化脚本默认只安装反代基础环境，不自动创建站点：
+
+```vbscript
+Const CREATE_SITE = "0"
+Const SYSTEM_UPGRADE = "1"
+Const INSTALL_3XUI = "1"
+Const INSTALL_CLIPROXY = "1"
+Const DOMAIN = ""
+Const UPSTREAM = ""
+```
+
+`INSTALL_3XUI="1"` 表示同时安装 3x-ui；如果只想安装反代基础环境，改成 `INSTALL_3XUI="0"`。
+`INSTALL_CLIPROXY="1"` 表示同时安装 CLIProxyAPI；如果不需要，改成 `INSTALL_CLIPROXY="0"`。
+
+如果你希望第一次安装时顺便创建站点，可以改成：
+
+```vbscript
+Const CREATE_SITE = "1"
+Const DOMAIN = "example.com"
+Const UPSTREAM = "app-container:8080"
+```
+
+前提是证书已经在服务器的 `/opt/reverse-proxy/ssl/example.com/` 目录下；否则脚本会生成 `.conf.disabled`，不会启用该站点。
+
+## 业务容器接入方式
+
+业务容器需要加入同一个 Docker 网络：
+
+```yaml
+services:
+  app-container:
+    image: your-app-image
+    container_name: app-container
+    restart: unless-stopped
+    expose:
+      - "8080"
+    networks:
+      - proxy-net
+
+networks:
+  proxy-net:
+    external: true
+```
+
+后端服务建议使用 `expose`，不要无必要使用 `ports` 暴露到公网。对外入口统一由反代容器的 `80` 和 `443` 提供。
+
+## 常用命令
+
+```bash
+sudo bash ./install.sh menu
+sudo bash ./install.sh status
+sudo bash ./install.sh test
+sudo bash ./install.sh reload
+sudo bash ./install.sh down
+sudo bash ./install.sh up
+```
+
+等价的 Docker 命令：
+
+```bash
+cd /opt/reverse-proxy
+docker compose up -d
+docker exec reverse-proxy nginx -t
+docker exec reverse-proxy nginx -s reload
+docker logs -f reverse-proxy
+```
+
+3x-ui 常用命令：
+
+```bash
+sudo bash ./install.sh install-3x-ui
+sudo bash ./install.sh update-3x-ui
+sudo bash ./install.sh 3x-ui-status
+sudo bash ./install.sh 3x-ui-down
+sudo bash ./install.sh 3x-ui-up
+```
+
+CLIProxyAPI 常用命令：
+
+```bash
+sudo bash ./install.sh install-cli-proxy
+sudo bash ./install.sh update-cli-proxy
+sudo bash ./install.sh cli-proxy-status
+sudo bash ./install.sh cli-proxy-down
+sudo bash ./install.sh cli-proxy-up
+```
+
+SSH 公钥登录脚本：
+
+```bash
+sudo bash ./setup-ssh-key-login.sh help
+```
 
 ## 参数说明
 
-- `DOMAIN`：VLESS 使用的域名（Nginx 443 站点）
-- `UUID`：VLESS 用户 ID，不填自动生成
-- `WSPATH`：VLESS 的 WS 路径，必须 `/` 开头
-- `VLESS_PORT`：VLESS 对外 TLS 端口（Nginx 监听），默认 `443`
-- `HY2_DOMAIN`：HY2 连接域名（默认跟 `DOMAIN` 一样）
-- `HY2_PORT`：HY2 UDP 端口，默认 `8443`
-- `HY2_PASSWORD`：HY2 密码，不填自动生成
-- `HY2_INSECURE`：HY2 客户端是否允许不验证证书，`0/1`
-- `HY2_ENABLE`：是否安装 Hysteria2，`0/1`，默认 `0`（不安装）；设为 `1` 则同时安装 HY2
-- `SOCKS_ENABLE`：默认 `0`（更安全），即默认不开放公网 SOCKS5；如需开启可设置 `SOCKS_ENABLE=1`，脚本会自动选用 50000+ 随机端口并生成强用户名/密码，同时配置 iptables 限制。
-- `SOCKS_PORT`：SOCKS5 监听端口（默认在 `50000-64999` 之间），可提前指定自定义值。
-- `SOCKS_USER`：SOCKS5 用户名（默认自动生成）。
-- `SOCKS_PASS`：SOCKS5 密码（默认自动生成 12 位字母数字字符串）。
-- `SOCKS_ALLOW`：可选，指定允许访问 SOCKS5 的 IP/网段，留空默认为任意来源。
-- `SOCKS_CONN_LIMIT_SECONDS`：SOCKS5 新连接统计窗口（秒），默认 `60`。
-- `SOCKS_CONN_LIMIT_HITCOUNT`：每个 IP 在统计窗口内最多允许的新连接数，默认 `20`（受限于 `xt_recent` 内核模块 `ip_pkt_list_tot` 默认上限）。
-- `SOCKS_REQUIRE_ATTACK_BEFORE_RESET`：是否“检测到异常才继续重置/修改”，`0/1`，默认 `0`。
-- `SOCKS_ALERT_WINDOW_SECONDS`：SOCKS5 检测历史窗口（秒），默认 `600`（10 分钟）。
-- `SOCKS_ALERT_MIN_EVENTS`：历史窗口内最少异常事件数阈值，默认 `2`。
-- `SOCKS_SECURITY_LOG_FILE`：SOCKS5 安全检测日志文件，默认 `/var/log/vps_socks_security.log`。
-- `TG_NOTIFY_ENABLE`：是否启用 Telegram 告警推送，`0/1`，默认 `0`（关闭）。
-- `TG_BOT_TOKEN`：Telegram Bot Token（`TG_NOTIFY_ENABLE=1` 时必填）。
-- `TG_CHAT_ID`：Telegram Chat ID（`TG_NOTIFY_ENABLE=1` 时必填）。
-- `TG_API_BASE_URL`：Telegram Bot API 地址，默认 `https://api.telegram.org`（交互模式默认不询问；如需自定义可通过环境变量传入）。
-- `TG_NOTIFY_LEVEL`：推送级别，`strong/all`，默认 `strong`（仅强告警）。
-- `TG_NOTIFY_COOLDOWN_SECONDS`：推送冷却时间（秒），默认 `300`。
-- `SOCKS_WATCHDOG_INTERVAL_SECONDS`：后台监控检测周期（秒），默认 `60`。
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PROJECT_DIR` | `/opt/reverse-proxy` | 反代项目目录 |
+| `CONTAINER_NAME` | `reverse-proxy` | Nginx 容器名称 |
+| `NETWORK_NAME` | `proxy-net` | 外部 Docker 网络名称 |
+| `NGINX_IMAGE` | `nginx:stable` | Nginx 镜像 |
+| `HTTP_PORT` | `80` | 宿主机 HTTP 端口 |
+| `HTTPS_PORT` | `443` | 宿主机 HTTPS 端口 |
+| `SYSTEM_UPGRADE` | `1` | 安装前是否执行 `apt-get update/upgrade` |
+| `INSTALL_3XUI` | `0` | `install` 时是否同时安装 3x-ui |
+| `XUI_DIR` | `/opt/3x-ui` | 3x-ui Compose 项目目录 |
+| `XUI_IMAGE` | `ghcr.io/mhsanaei/3x-ui:latest` | 3x-ui Docker 镜像 |
+| `XUI_CONTAINER_NAME` | `3xui_app` | 3x-ui 容器名称 |
+| `INSTALL_CLIPROXY` | `0` | `install` 时是否同时安装 CLIProxyAPI |
+| `CLI_PROXY_DIR` | `/opt/cli-proxy-api` | CLIProxyAPI Compose 项目目录 |
+| `CLI_PROXY_IMAGE` | `eceasy/cli-proxy-api:latest` | CLIProxyAPI Docker 镜像 |
+| `CLI_PROXY_BIND_IP` | `127.0.0.1` | CLIProxyAPI 宿主机绑定地址 |
+| `CLI_PROXY_API_PORT` | `8317` | CLIProxyAPI API 端口 |
+| `DOMAIN` | 空 | 要添加的域名 |
+| `UPSTREAM` | 空 | 后端容器名和端口 |
+| `CREATE_SITE` | `0` | `install` 时是否顺便创建第一个站点 |
+| `INSTALL_DOCKER` | `1` | Docker 不存在时是否自动安装 |
+| `START_AFTER_INSTALL` | `1` | 初始化后是否启动容器 |
+| `OVERWRITE` | `0` | 是否覆盖已有配置，覆盖前会自动备份 |
 
-## 重要说明
+SSH 脚本参数：
 
-- 脚本默认使用 Cloudflare Origin 证书（手动粘贴 PEM/KEY）。
-- VLESS（经 Cloudflare）可以橙云代理。
-- 若 VLESS 走 Cloudflare 橙云，请使用 Cloudflare 支持的 HTTPS 端口（如 `443/8443` 等）。
-- HY2 走 UDP，通常建议使用 DNS only（灰云），并放行 `HY2_PORT/udp`。
-- 如果 HY2 使用 Origin 证书，客户端通常需要 `insecure=1` 或使用证书 Pin。
-- 脚本仍以 VLESS/HY2 为核心，若需要对公网开放 SOCKS5，可开启 `SOCKS_ENABLE=1`，脚本会根据 `SOCKS5_HARDENING.md` 的安全措施自动配置高位端口、强凭据、iptables 限制与可选 IP 白名单。
-- SOCKS5 仅开放 TCP，Xray 的 SOCKS 入站显式禁用 UDP（`"udp": false`）。
-- SOCKS5 默认限速为”每个 IP 每 60 秒最多 20 个新连接”，用于缓解暴力破解。注意 `xt_recent` 内核模块的 `ip_pkt_list_tot` 默认上限通常为 20，若需更高值请先执行 `echo 100 > /proc/net/xt_recent/ip_pkt_list_tot`。
-- 若用于比特浏览器（BitBrowser）等多开浏览器场景，强烈建议设置 `SOCKS_ALLOW` 为你的客户端 IP，白名单 IP 会跳过限速直接放行，避免多窗口并发时被误拦截。
-- 脚本会在执行前输出 SOCKS5 安全检测（连接数、来源 IP、iptables 丢弃计数），并记录到 `SOCKS_SECURITY_LOG_FILE`；单次异常记为弱告警，历史窗口（默认 10 分钟）达到阈值记为强告警。
-- 若设置 `SOCKS_REQUIRE_ATTACK_BEFORE_RESET=1`，仅在检测到疑似攻击/他人使用时继续。
-- 若启用 `TG_NOTIFY_ENABLE=1`，脚本会自动配置 `socks5-watchdog.timer`，按 `SOCKS_WATCHDOG_INTERVAL_SECONDS` 周期检测并推送告警到 Telegram（支持自定义 `TG_API_BASE_URL`）。
-- 安装过程会显示 `>>> [步骤 x/y]` 进度；正常结束会显示“`安装完成标记：INSTALL_DONE=1`”和服务运行状态检查结果。
-- 交互模式下 Telegram Bot Token 改为明文输入（不再隐藏字符），便于确认输入内容。
-- 启用 SOCKS5 时如需启用 UFW 防火墙，可取消 `install.sh` 中 `optional_ufw` 的注释，该函数会同时放行 SOCKS5 端口；`iptables` 规则会由 `netfilter-persistent` 持久化（见 `SOCKS5_HARDENING.md`）。
-- 建议在本地和 VPS 之间用 SSH 隧道（例如 `ssh -N -L 127.0.0.1:1080:127.0.0.1:1080 user@vps`）将远程服务映射到本地 127.0.0.1，避免直接暴露 SOCKS5，除非你确实需要公网访问；
-- 只要保留脚本生成的 `UUID`/`HY2_PASSWORD`，就能借助 SSH 隧道复用原有接入信息。
-- 安装完成时会打印类似内容，便于本地直接复制粘贴：  
-  `Socks5 本地代理：127.0.0.1:10808（usrA3xK2/aBcDeFgH1234）`  
-  `Socks5 公网直连：203.0.113.55:10808（usrA3xK2/aBcDeFgH1234）`
-- 新服务器上先执行 `sudo apt update && sudo apt install -y git curl`，再 `git clone https://github.com/47alan/VPS_simple.git`、`cd VPS_simple` 并运行 `sudo bash ./install.sh`。
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `SSH_USER` | `root` 或当前 sudo 用户 | 写入公钥的用户 |
+| `SSH_PUBLIC_KEY` | 空 | 要写入的 OpenSSH 公钥 |
+| `SSH_PUBLIC_KEY_FILE` | 空 | 服务器上的公钥文件路径 |
+| `SSH_PORT` | 空 | 新 SSH 端口，留空则不改端口 |
+| `KEEP_OLD_SSH_PORT` | `1` | 修改端口时是否保留旧端口 |
+| `DISABLE_PASSWORD_LOGIN` | `0` | 是否关闭密码登录 |
+| `PERMIT_ROOT_LOGIN` | 空 | 可手动设置 `yes`、`prohibit-password`、`no` |
 
-## 输出内容
+## 备份建议
 
-安装结束后会在终端显示：
+重点备份整个目录：
 
-- VLESS 分享链接 + 二维码
-- HY2 分享链接 + 二维码
+```bash
+sudo tar -czvf reverse-proxy-backup.tar.gz /opt/reverse-proxy
+```
 
-可直接复制到支持协议的客户端快速导入。
+最重要的是 `ssl/` 下的私钥文件，不能提交到 Git，也不要写入 Docker 镜像。
