@@ -10,9 +10,10 @@
 - 日志目录：`/opt/reverse-proxy/logs`
 - 3x-ui 目录：`/opt/3x-ui`
 - CLIProxyAPI 目录：`/opt/cli-proxy-api`
+- SkrBTSo Helper 目录：`/opt/skrbtso-helper`
 - SSH 公钥登录脚本：`setup-ssh-key-login.sh`
 
-脚本用于 Ubuntu 24.04 VPS 初始配置：系统更新升级、Docker、Nginx 反代、可选 3x-ui、可选 CLIProxyAPI，以及独立的 SSH 公钥登录配置。
+脚本用于 Ubuntu 24.04 VPS 初始配置：系统更新升级、Docker、Nginx 反代、可选 3x-ui、可选 CLIProxyAPI、可选 SkrBTSo Helper，以及独立的 SSH 公钥登录配置。
 
 所有容器均使用 `restart: unless-stopped`，脚本会执行 `systemctl enable --now docker`，服务器重启后 Docker 服务和这些容器会自动启动。
 
@@ -43,7 +44,7 @@ sudo bash /tmp/reverse-proxy-install.sh menu
 - 安装基础环境 + Nginx 反代
 - 安装 3x-ui
 - 安装 CLIProxyAPI
-- 全套安装
+- 安装 SkrBTSo Helper
 - 添加 HTTPS 反代站点
 - 查看状态、更新镜像
 - 停止/卸载容器，默认保留配置和数据
@@ -105,20 +106,12 @@ sudo bash ./install.sh menu
 
 如果 SSH 不是 22 端口，把 `-Port 22` 改成你的实际端口。
 
-## Ubuntu 24.04 一条命令安装全套容器
+## 单独安装 3x-ui / CLIProxyAPI / SkrBTSo Helper
 
 3x-ui 使用官方 Docker 镜像 `ghcr.io/mhsanaei/3x-ui:latest`，独立安装在 `/opt/3x-ui`，使用 `network_mode: host`。默认面板地址通常是：
 
 ```text
 http://服务器IP:2053
-```
-
-一条命令安装反代、3x-ui 和 CLIProxyAPI：
-
-```bash
-sudo apt-get update -y && sudo apt-get install -y curl ca-certificates && \
-curl -fsSL https://raw.githubusercontent.com/47alan/VPS_simple/main/install.sh -o /tmp/reverse-proxy-install.sh && \
-sudo INSTALL_3XUI=1 INSTALL_CLIPROXY=1 bash /tmp/reverse-proxy-install.sh install
 ```
 
 只安装 3x-ui：
@@ -128,6 +121,14 @@ sudo apt-get update -y && sudo apt-get install -y curl ca-certificates && \
 curl -fsSL https://raw.githubusercontent.com/47alan/VPS_simple/main/install.sh -o /tmp/reverse-proxy-install.sh && \
 sudo bash /tmp/reverse-proxy-install.sh install-3x-ui
 ```
+
+安装结束后，脚本会在 Xshell 终端显示 3x-ui 面板登录地址、用户名和密码，并保存到：
+
+```text
+/opt/3x-ui/install-info.txt
+```
+
+Docker 全新数据目录的默认账号和密码是 `admin` / `admin`。如果 `/opt/3x-ui/db/x-ui.db` 已经存在，脚本不会读取或覆盖你之前修改过的账号密码，会提示以旧信息为准。
 
 首次登录后必须立即修改默认账号、默认密码、面板路径和面板端口。3x-ui 使用 host 网络，你在面板里创建的入站端口会直接占用宿主机端口，需要同步放行云防火墙或安全组。
 
@@ -140,6 +141,23 @@ sudo bash /tmp/reverse-proxy-install.sh install-cli-proxy
 ```
 
 CLIProxyAPI 默认安装到 `/opt/cli-proxy-api`，镜像为 `eceasy/cli-proxy-api:latest`，默认只绑定 `127.0.0.1:8317`，不会直接暴露到公网。需要公网访问时设置 `CLI_PROXY_BIND_IP=0.0.0.0`，同时放行云防火墙或安全组。
+
+只安装 SkrBTSo Helper：
+
+```bash
+sudo apt-get update -y && sudo apt-get install -y curl ca-certificates && \
+curl -fsSL https://raw.githubusercontent.com/47alan/VPS_simple/main/install.sh -o /tmp/reverse-proxy-install.sh && \
+sudo bash /tmp/reverse-proxy-install.sh install-skrbtso
+```
+
+如果要同时给 SkrBTSo Helper 配置 HTTPS 反代，可以先安装 Nginx 反代，再指定域名和证书路径：
+
+```bash
+sudo SKRBTSO_DOMAIN=helper.example.com \
+SSL_CERT_PATH=/root/certs/fullchain.pem \
+SSL_KEY_PATH=/root/certs/privkey.pem \
+bash /tmp/reverse-proxy-install.sh install-skrbtso
+```
 
 ## SSH 公钥登录
 
@@ -206,6 +224,16 @@ sudo chmod 600 /opt/reverse-proxy/ssl/example.com/privkey.pem
 sudo DOMAIN=example.com UPSTREAM=app-container:8080 bash ./install.sh add-site
 ```
 
+如果证书已经在服务器其他路径，也可以让脚本读取后复制到标准目录：
+
+```bash
+sudo DOMAIN=example.com \
+UPSTREAM=app-container:8080 \
+SSL_CERT_PATH=/root/certs/fullchain.pem \
+SSL_KEY_PATH=/root/certs/privkey.pem \
+bash ./install.sh add-site
+```
+
 `UPSTREAM` 可以写成：
 
 ```text
@@ -242,6 +270,7 @@ bash ./install.sh install
 - `scripts/xshell_reverse_proxy_install.vbs`：初始化一台 Ubuntu 24.04 VPS
 - `scripts/xshell_3xui_install.vbs`：只安装 3x-ui Docker 容器
 - `scripts/xshell_cli_proxy_install.vbs`：只安装 CLIProxyAPI Docker 容器
+- `scripts/xshell_skrbtso_install.vbs`：只安装 SkrBTSo Helper Docker 容器
 - `scripts/xshell_setup_ssh_key_login.vbs`：配置 SSH 公钥登录、端口和密码登录策略
 - `scripts/xshell_reverse_proxy_add_site.vbs`：给已初始化的服务器添加一个 HTTPS 反代站点
 
@@ -257,14 +286,13 @@ bash ./install.sh install
 ```vbscript
 Const CREATE_SITE = "0"
 Const SYSTEM_UPGRADE = "1"
-Const INSTALL_3XUI = "1"
-Const INSTALL_CLIPROXY = "1"
+Const INSTALL_3XUI = "0"
+Const INSTALL_CLIPROXY = "0"
 Const DOMAIN = ""
 Const UPSTREAM = ""
 ```
 
-`INSTALL_3XUI="1"` 表示同时安装 3x-ui；如果只想安装反代基础环境，改成 `INSTALL_3XUI="0"`。
-`INSTALL_CLIPROXY="1"` 表示同时安装 CLIProxyAPI；如果不需要，改成 `INSTALL_CLIPROXY="0"`。
+`INSTALL_3XUI="0"`、`INSTALL_CLIPROXY="0"` 表示只安装反代基础环境。你如果要安装 3x-ui 或 CLIProxyAPI，推荐用菜单单独选择，或运行对应的 `xshell_3xui_install.vbs`、`xshell_cli_proxy_install.vbs`。
 
 如果你希望第一次安装时顺便创建站点，可以改成：
 
@@ -329,6 +357,8 @@ sudo bash ./install.sh 3x-ui-down
 sudo bash ./install.sh 3x-ui-up
 ```
 
+3x-ui 安装结果会保存到 `/opt/3x-ui/install-info.txt`。
+
 CLIProxyAPI 常用命令：
 
 ```bash
@@ -337,6 +367,16 @@ sudo bash ./install.sh update-cli-proxy
 sudo bash ./install.sh cli-proxy-status
 sudo bash ./install.sh cli-proxy-down
 sudo bash ./install.sh cli-proxy-up
+```
+
+SkrBTSo Helper 常用命令：
+
+```bash
+sudo bash ./install.sh install-skrbtso
+sudo bash ./install.sh update-skrbtso
+sudo bash ./install.sh skrbtso-status
+sudo bash ./install.sh skrbtso-down
+sudo bash ./install.sh skrbtso-up
 ```
 
 SSH 公钥登录脚本：
@@ -360,11 +400,18 @@ sudo bash ./setup-ssh-key-login.sh help
 | `XUI_DIR` | `/opt/3x-ui` | 3x-ui Compose 项目目录 |
 | `XUI_IMAGE` | `ghcr.io/mhsanaei/3x-ui:latest` | 3x-ui Docker 镜像 |
 | `XUI_CONTAINER_NAME` | `3xui_app` | 3x-ui 容器名称 |
+| `XUI_PANEL_PORT` | `2053` | 3x-ui 默认面板端口 |
+| `XUI_INFO_FILE` | `/opt/3x-ui/install-info.txt` | 3x-ui 安装结果保存路径 |
 | `INSTALL_CLIPROXY` | `0` | `install` 时是否同时安装 CLIProxyAPI |
 | `CLI_PROXY_DIR` | `/opt/cli-proxy-api` | CLIProxyAPI Compose 项目目录 |
 | `CLI_PROXY_IMAGE` | `eceasy/cli-proxy-api:latest` | CLIProxyAPI Docker 镜像 |
 | `CLI_PROXY_BIND_IP` | `127.0.0.1` | CLIProxyAPI 宿主机绑定地址 |
 | `CLI_PROXY_API_PORT` | `8317` | CLIProxyAPI API 端口 |
+| `INSTALL_SKRBTSO` | `0` | `install` 时是否同时安装 SkrBTSo Helper |
+| `SKRBTSO_DIR` | `/opt/skrbtso-helper` | SkrBTSo Helper Compose 项目目录 |
+| `SKRBTSO_DOMAIN` | 空 | SkrBTSo Helper 的 HTTPS 反代域名 |
+| `SSL_CERT_PATH` | 空 | 自定义 fullchain.pem 路径 |
+| `SSL_KEY_PATH` | 空 | 自定义 privkey.pem 路径 |
 | `DOMAIN` | 空 | 要添加的域名 |
 | `UPSTREAM` | 空 | 后端容器名和端口 |
 | `CREATE_SITE` | `0` | `install` 时是否顺便创建第一个站点 |
@@ -392,4 +439,4 @@ SSH 脚本参数：
 sudo tar -czvf reverse-proxy-backup.tar.gz /opt/reverse-proxy
 ```
 
-最重要的是 `ssl/` 下的私钥文件，不能提交到 Git，也不要写入 Docker 镜像。
+同时建议备份 `/opt/3x-ui/db`、`/opt/3x-ui/install-info.txt`、`/opt/cli-proxy-api/config.yaml`、`/opt/cli-proxy-api/auths`、`/opt/skrbtso-helper/.env` 和 `/opt/skrbtso-helper/skrbtso-browser`。最重要的是 `ssl/` 下的私钥文件，不能提交到 Git，也不要写入 Docker 镜像。

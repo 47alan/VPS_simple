@@ -15,6 +15,7 @@ XUI_DIR="${XUI_DIR:-/opt/3x-ui}"
 XUI_IMAGE="${XUI_IMAGE:-ghcr.io/mhsanaei/3x-ui:latest}"
 XUI_CONTAINER_NAME="${XUI_CONTAINER_NAME:-3xui_app}"
 XUI_PANEL_PORT="${XUI_PANEL_PORT:-2053}"
+XUI_INFO_FILE="${XUI_INFO_FILE:-}"
 
 CLI_PROXY_DIR="${CLI_PROXY_DIR:-/opt/cli-proxy-api}"
 CLI_PROXY_IMAGE="${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:latest}"
@@ -25,15 +26,31 @@ CLI_PROXY_EXTRA_PORTS="${CLI_PROXY_EXTRA_PORTS:-8085 1455 54545 51121 11451}"
 CLI_PROXY_API_KEY="${CLI_PROXY_API_KEY:-}"
 CLI_PROXY_MANAGEMENT_SECRET="${CLI_PROXY_MANAGEMENT_SECRET:-}"
 
+SKRBTSO_DIR="${SKRBTSO_DIR:-/opt/skrbtso-helper}"
+SKRBTSO_REPO_URL="${SKRBTSO_REPO_URL:-https://github.com/47alan/skrbtso-helper.git}"
+SKRBTSO_BRANCH="${SKRBTSO_BRANCH:-main}"
+SKRBTSO_IMAGE="${SKRBTSO_IMAGE:-local/skrbtso-scrapling-helper:latest}"
+SKRBTSO_CONTAINER_NAME="${SKRBTSO_CONTAINER_NAME:-skrbtso-scrapling-helper}"
+SKRBTSO_SERVICE_NAME="${SKRBTSO_SERVICE_NAME:-skrbtso-helper}"
+SKRBTSO_PORT="${SKRBTSO_PORT:-8787}"
+SKRBTSO_BIND_IP="${SKRBTSO_BIND_IP:-127.0.0.1}"
+SKRBTSO_DOMAIN="${SKRBTSO_DOMAIN:-}"
+SKRBTSO_TOKEN="${SKRBTSO_TOKEN:-}"
+SKRBTSO_SEARCH_ORIGIN="${SKRBTSO_SEARCH_ORIGIN:-https://skrbtso.top}"
+SKRBTSO_ALLOWED_SEARCH_HOSTS="${SKRBTSO_ALLOWED_SEARCH_HOSTS:-skrbtso.top}"
+
 DOMAIN="${DOMAIN:-}"
 UPSTREAM="${UPSTREAM:-}"
 CREATE_SITE="${CREATE_SITE:-}"
+SSL_CERT_PATH="${SSL_CERT_PATH:-}"
+SSL_KEY_PATH="${SSL_KEY_PATH:-}"
 
 SYSTEM_UPGRADE="${SYSTEM_UPGRADE:-1}"
 INSTALL_DOCKER="${INSTALL_DOCKER:-1}"
 START_AFTER_INSTALL="${START_AFTER_INSTALL:-1}"
 INSTALL_3XUI="${INSTALL_3XUI:-0}"
 INSTALL_CLIPROXY="${INSTALL_CLIPROXY:-0}"
+INSTALL_SKRBTSO="${INSTALL_SKRBTSO:-0}"
 OVERWRITE="${OVERWRITE:-0}"
 
 COMMAND="${1:-install}"
@@ -62,6 +79,11 @@ Docker Nginx 反向代理一键脚本
   sudo bash ./install.sh cli-proxy-status  查看 CLIProxyAPI Compose 服务状态
   sudo bash ./install.sh cli-proxy-down    停止 CLIProxyAPI 容器
   sudo bash ./install.sh cli-proxy-up      启动 CLIProxyAPI 容器
+  sudo bash ./install.sh install-skrbtso    只安装/启动 SkrBTSo Helper 容器
+  sudo bash ./install.sh update-skrbtso     更新 SkrBTSo Helper 仓库并重建容器
+  sudo bash ./install.sh skrbtso-status     查看 SkrBTSo Helper Compose 服务状态
+  sudo bash ./install.sh skrbtso-down       停止 SkrBTSo Helper 容器
+  sudo bash ./install.sh skrbtso-up         启动 SkrBTSo Helper 容器
   sudo bash ./install.sh add-site    为一个域名生成 HTTPS 反代配置
   sudo bash ./install.sh test        检查容器内 Nginx 配置
   sudo bash ./install.sh reload      检查并重载 Nginx
@@ -79,12 +101,19 @@ Docker Nginx 反向代理一键脚本
   SYSTEM_UPGRADE=1
   INSTALL_3XUI=0
   INSTALL_CLIPROXY=0
+  INSTALL_SKRBTSO=0
   XUI_DIR=/opt/3x-ui
   XUI_IMAGE=ghcr.io/mhsanaei/3x-ui:latest
   XUI_CONTAINER_NAME=3xui_app
+  XUI_PANEL_PORT=2053
+  XUI_INFO_FILE=/opt/3x-ui/install-info.txt
   CLI_PROXY_DIR=/opt/cli-proxy-api
   CLI_PROXY_BIND_IP=127.0.0.1
   CLI_PROXY_API_PORT=8317
+  SKRBTSO_DIR=/opt/skrbtso-helper
+  SKRBTSO_DOMAIN=helper.example.com
+  SSL_CERT_PATH=/path/to/fullchain.pem
+  SSL_KEY_PATH=/path/to/privkey.pem
   DOMAIN=example.com
   UPSTREAM=app-container:8080
   CREATE_SITE=1
@@ -93,9 +122,9 @@ Docker Nginx 反向代理一键脚本
 示例:
   sudo bash ./install.sh menu
   sudo bash ./install.sh install
-  sudo INSTALL_3XUI=1 INSTALL_CLIPROXY=1 bash ./install.sh install
   sudo bash ./install.sh install-3x-ui
   sudo bash ./install.sh install-cli-proxy
+  sudo SKRBTSO_DOMAIN=helper.example.com bash ./install.sh install-skrbtso
   sudo DOMAIN=example.com UPSTREAM=app-container:8080 bash ./install.sh add-site
 EOF
 }
@@ -125,6 +154,14 @@ xui_compose_file() {
   printf '%s/docker-compose.yml\n' "${XUI_DIR}"
 }
 
+xui_info_file() {
+  if [[ -n "${XUI_INFO_FILE}" ]]; then
+    printf '%s\n' "${XUI_INFO_FILE}"
+  else
+    printf '%s/install-info.txt\n' "${XUI_DIR}"
+  fi
+}
+
 xui_compose_cmd() {
   docker compose --project-directory "${XUI_DIR}" -f "$(xui_compose_file)" "$@"
 }
@@ -137,12 +174,55 @@ cli_proxy_compose_cmd() {
   docker compose --project-directory "${CLI_PROXY_DIR}" -f "$(cli_proxy_compose_file)" "$@"
 }
 
+skrbtso_compose_file() {
+  printf '%s/docker-compose.yml\n' "${SKRBTSO_DIR}"
+}
+
+skrbtso_compose_cmd() {
+  docker compose --project-directory "${SKRBTSO_DIR}" -f "$(skrbtso_compose_file)" "$@"
+}
+
 random_hex() {
   local bytes="${1:-16}"
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -hex "${bytes}"
   else
     tr -d '-' < /proc/sys/kernel/random/uuid
+  fi
+}
+
+detect_server_ip() {
+  local value=""
+  if command -v curl >/dev/null 2>&1; then
+    value="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+    if [[ -n "${value}" ]]; then
+      printf '%s\n' "${value}"
+      return
+    fi
+  fi
+  if command -v ip >/dev/null 2>&1; then
+    value="$(ip route get 1.1.1.1 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }' || true)"
+    if [[ -n "${value}" ]]; then
+      printf '%s\n' "${value}"
+      return
+    fi
+  fi
+  if command -v hostname >/dev/null 2>&1; then
+    value="$(hostname -I 2>/dev/null | awk '{ print $1 }' || true)"
+    if [[ -n "${value}" ]]; then
+      printf '%s\n' "${value}"
+      return
+    fi
+  fi
+  printf '服务器IP\n'
+}
+
+format_url_host() {
+  local value="$1"
+  if [[ "${value}" == *:* && "${value}" != \[*\] ]]; then
+    printf '[%s]\n' "${value}"
+  else
+    printf '%s\n' "${value}"
   fi
 }
 
@@ -174,6 +254,20 @@ validate_domain() {
   if [[ ! "${value}" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]; then
     err "DOMAIN 格式不合法：${value}"
   fi
+}
+
+normalize_domain() {
+  local value="$1"
+  value="${value//$'\r'/}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  value="${value#*://}"
+  value="${value%%/*}"
+  value="${value%%\?*}"
+  value="${value%%#*}"
+  value="${value%%:*}"
+  value="${value%.}"
+  printf '%s\n' "${value,,}"
 }
 
 normalize_upstream() {
@@ -397,6 +491,11 @@ install_xui() {
   validate_flag OVERWRITE "${OVERWRITE}"
   validate_port XUI_PANEL_PORT "${XUI_PANEL_PORT}"
 
+  local existing_db=0
+  if [[ -s "${XUI_DIR}/db/x-ui.db" ]]; then
+    existing_db=1
+  fi
+
   run_system_upgrade_once
   install_docker_engine
   ensure_xui_layout
@@ -404,7 +503,8 @@ install_xui() {
   xui_compose_cmd up -d
 
   log "3x-ui 容器已启动：${XUI_CONTAINER_NAME}"
-  print_xui_summary
+  write_xui_install_info "${existing_db}"
+  print_xui_summary "${existing_db}"
 }
 
 update_xui() {
@@ -527,6 +627,195 @@ update_cli_proxy() {
   cli_proxy_compose_cmd pull
   cli_proxy_compose_cmd up -d
   log "CLIProxyAPI 镜像已更新并重启"
+}
+
+ensure_skrbtso_packages() {
+  local missing=()
+  for cmd in git openssl curl; do
+    command -v "${cmd}" >/dev/null 2>&1 || missing+=("${cmd}")
+  done
+  if (( ${#missing[@]} == 0 )); then
+    return
+  fi
+  command -v apt-get >/dev/null 2>&1 || err "缺少命令：${missing[*]}，且当前系统没有 apt-get"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y
+  apt-get install -y "${missing[@]}"
+}
+
+ensure_skrbtso_layout() {
+  mkdir -p "${SKRBTSO_DIR}" "${SKRBTSO_DIR}/skrbtso-browser"
+  chmod 755 "${SKRBTSO_DIR}" "${SKRBTSO_DIR}/skrbtso-browser"
+  log "SkrBTSo Helper 目录已就绪：${SKRBTSO_DIR}"
+}
+
+ensure_skrbtso_repo() {
+  local repo_dir="${SKRBTSO_DIR}/repo"
+  if [[ -d "${repo_dir}/.git" ]]; then
+    git -C "${repo_dir}" fetch --depth 1 origin "${SKRBTSO_BRANCH}"
+    git -C "${repo_dir}" checkout -B "${SKRBTSO_BRANCH}" "origin/${SKRBTSO_BRANCH}"
+    git -C "${repo_dir}" reset --hard "origin/${SKRBTSO_BRANCH}"
+    log "SkrBTSo Helper 仓库已更新：${repo_dir}"
+    return
+  fi
+  if [[ -e "${repo_dir}" ]]; then
+    err "SkrBTSo Helper repo 目录已存在但不是 Git 仓库：${repo_dir}"
+  fi
+  git clone --depth 1 --branch "${SKRBTSO_BRANCH}" "${SKRBTSO_REPO_URL}" "${repo_dir}"
+  log "SkrBTSo Helper 仓库已克隆：${repo_dir}"
+}
+
+write_skrbtso_env_file() {
+  local env_file="${SKRBTSO_DIR}/.env"
+  if [[ -f "${env_file}" ]] && ! is_truthy "${OVERWRITE}"; then
+    SKRBTSO_TOKEN="$(awk -F= '$1 == "SKRBTSO_HELPER_TOKEN" { print $2; exit }' "${env_file}" 2>/dev/null || true)"
+    warn "SkrBTSo Helper .env 已存在，保持不变：${env_file}（如需覆盖请设置 OVERWRITE=1）"
+    return
+  fi
+  if [[ -z "${SKRBTSO_TOKEN}" ]]; then
+    SKRBTSO_TOKEN="$(random_hex 32)"
+  fi
+  write_file "${env_file}" <<EOF
+SKRBTSO_HELPER_TOKEN=${SKRBTSO_TOKEN}
+SKRBTSO_HELPER_SEARCH_ORIGIN=${SKRBTSO_SEARCH_ORIGIN}
+SKRBTSO_HELPER_ALLOWED_SEARCH_HOSTS=${SKRBTSO_ALLOWED_SEARCH_HOSTS}
+SKRBTSO_HELPER_PORT=${SKRBTSO_PORT}
+SKRBTSO_HELPER_TIMEOUT=180
+SKRBTSO_HELPER_FORM_RESULT_WAIT=45
+SKRBTSO_HELPER_DETAIL_WAIT=8
+SKRBTSO_HELPER_STEALTH_FIRST=1
+SKRBTSO_HELPER_FORM_FIRST=1
+SKRBTSO_HELPER_MAX_CONCURRENT=1
+SKRBTSO_HELPER_DEFAULT_MAX_RESULTS=10
+SKRBTSO_HELPER_MAX_RESULTS_LIMIT=20
+SKRBTSO_HELPER_KEEP_SESSION=1
+SKRBTSO_HELPER_USER_DATA_DIR=/data/.skrbtso-browser
+SKRBTSO_HELPER_EXTRA_POPUP_CANDIDATES=2
+SKRBTSO_HELPER_CACHE_TTL=21600
+SKRBTSO_HELPER_RESULT_POLL_MS=500
+SKRBTSO_HELPER_CORS_ORIGIN=*
+APP_NAME=${SKRBTSO_CONTAINER_NAME}
+HELPER_IMAGE=${SKRBTSO_IMAGE}
+HELPER_BIND_HOST=${SKRBTSO_BIND_IP}
+HELPER_DOMAIN=${SKRBTSO_DOMAIN}
+EOF
+  chmod 600 "${env_file}"
+}
+
+write_skrbtso_compose_file() {
+  write_file "$(skrbtso_compose_file)" <<EOF
+services:
+  ${SKRBTSO_SERVICE_NAME}:
+    build:
+      context: ./repo
+      dockerfile: tools/skrbtso-helper/Dockerfile
+    image: ${SKRBTSO_IMAGE}
+    container_name: ${SKRBTSO_CONTAINER_NAME}
+    restart: unless-stopped
+    shm_size: "1gb"
+    env_file:
+      - .env
+    environment:
+      TZ: Asia/Shanghai
+      SKRBTSO_HELPER_HOST: 0.0.0.0
+      SKRBTSO_HELPER_PORT: ${SKRBTSO_PORT}
+      SKRBTSO_HELPER_SEARCH_ORIGIN: ${SKRBTSO_SEARCH_ORIGIN}
+      SKRBTSO_HELPER_ALLOWED_SEARCH_HOSTS: ${SKRBTSO_ALLOWED_SEARCH_HOSTS}
+      SKRBTSO_HELPER_TIMEOUT: 180
+      SKRBTSO_HELPER_FORM_RESULT_WAIT: 45
+      SKRBTSO_HELPER_DETAIL_WAIT: 8
+      SKRBTSO_HELPER_STEALTH_FIRST: 1
+      SKRBTSO_HELPER_FORM_FIRST: 1
+      SKRBTSO_HELPER_MAX_CONCURRENT: 1
+      SKRBTSO_HELPER_DEFAULT_MAX_RESULTS: 10
+      SKRBTSO_HELPER_MAX_RESULTS_LIMIT: 20
+      SKRBTSO_HELPER_KEEP_SESSION: 1
+      SKRBTSO_HELPER_USER_DATA_DIR: /data/.skrbtso-browser
+      SKRBTSO_HELPER_EXTRA_POPUP_CANDIDATES: 2
+      SKRBTSO_HELPER_CACHE_TTL: 21600
+      SKRBTSO_HELPER_RESULT_POLL_MS: 500
+      SKRBTSO_HELPER_CORS_ORIGIN: "*"
+    volumes:
+      - ./skrbtso-browser:/data/.skrbtso-browser
+    ports:
+      - "${SKRBTSO_BIND_IP}:${SKRBTSO_PORT}:${SKRBTSO_PORT}"
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
+    name: ${NETWORK_NAME}
+EOF
+  chmod 644 "$(skrbtso_compose_file)"
+}
+
+configure_skrbtso_reverse_proxy() {
+  if [[ -z "${SKRBTSO_DOMAIN}" ]]; then
+    warn "未设置 SKRBTSO_DOMAIN，已跳过 Nginx HTTPS 站点配置"
+    return
+  fi
+  if [[ ! -f "$(compose_file)" ]]; then
+    warn "未找到 Nginx 反代 Compose 文件，请先安装基础环境 + Nginx 反代"
+    return
+  fi
+
+  SKRBTSO_DOMAIN="$(normalize_domain "${SKRBTSO_DOMAIN}")"
+  validate_domain "${SKRBTSO_DOMAIN}"
+  DOMAIN="${SKRBTSO_DOMAIN}"
+  UPSTREAM="${SKRBTSO_SERVICE_NAME}:${SKRBTSO_PORT}"
+  write_site_config
+
+  if [[ "${SITE_CONFIG_ACTIVE}" -eq 1 ]]; then
+    if container_running; then
+      reload_nginx
+    else
+      start_proxy
+    fi
+  else
+    warn "SkrBTSo Helper HTTPS 站点未启用：缺少证书或证书路径未提供"
+  fi
+}
+
+install_skrbtso() {
+  validate_flag INSTALL_DOCKER "${INSTALL_DOCKER}"
+  validate_flag OVERWRITE "${OVERWRITE}"
+  validate_port SKRBTSO_PORT "${SKRBTSO_PORT}"
+
+  if [[ -t 0 && -z "${SKRBTSO_DOMAIN}" ]]; then
+    local answer=""
+    read -r -p "是否为 SkrBTSo Helper 配置 HTTPS 域名反代？[y/N]: " answer
+    case "${answer}" in
+      y|Y|yes|YES)
+        prompt_value SKRBTSO_DOMAIN "请输入 helper 域名，例如 helper.example.com"
+        ;;
+    esac
+  fi
+
+  run_system_upgrade_once
+  install_docker_engine
+  ensure_skrbtso_packages
+  ensure_network
+  ensure_skrbtso_layout
+  ensure_skrbtso_repo
+  write_skrbtso_env_file
+  write_skrbtso_compose_file
+  skrbtso_compose_cmd up -d --build
+  log "SkrBTSo Helper 容器已启动：${SKRBTSO_CONTAINER_NAME}"
+  configure_skrbtso_reverse_proxy
+  print_skrbtso_summary
+}
+
+update_skrbtso() {
+  validate_flag INSTALL_DOCKER "${INSTALL_DOCKER}"
+  install_docker_engine
+  ensure_skrbtso_packages
+  ensure_skrbtso_repo
+  if [[ ! -f "$(skrbtso_compose_file)" ]]; then
+    err "未找到 SkrBTSo Helper Compose 文件：$(skrbtso_compose_file)，请先执行 install-skrbtso"
+  fi
+  skrbtso_compose_cmd up -d --build
+  log "SkrBTSo Helper 已更新并重启"
 }
 
 write_compose_file() {
@@ -654,6 +943,46 @@ set_cert_permissions() {
   fi
 }
 
+import_custom_cert_files() {
+  local cert_dir="$1"
+  if [[ -z "${SSL_CERT_PATH}" && -z "${SSL_KEY_PATH}" ]]; then
+    return
+  fi
+  if [[ -z "${SSL_CERT_PATH}" || -z "${SSL_KEY_PATH}" ]]; then
+    err "SSL_CERT_PATH 和 SSL_KEY_PATH 必须同时提供"
+  fi
+  [[ -f "${SSL_CERT_PATH}" ]] || err "找不到证书文件：${SSL_CERT_PATH}"
+  [[ -f "${SSL_KEY_PATH}" ]] || err "找不到私钥文件：${SSL_KEY_PATH}"
+
+  mkdir -p "${cert_dir}"
+  cp -f "${SSL_CERT_PATH}" "${cert_dir}/fullchain.pem"
+  cp -f "${SSL_KEY_PATH}" "${cert_dir}/privkey.pem"
+  set_cert_permissions "${cert_dir}"
+  log "已从自定义路径读取证书并复制到：${cert_dir}"
+}
+
+prompt_custom_cert_paths_if_needed() {
+  local cert_dir="$1"
+  if [[ ! -t 0 ]]; then
+    return
+  fi
+  if [[ -f "${cert_dir}/fullchain.pem" && -f "${cert_dir}/privkey.pem" ]]; then
+    return
+  fi
+  if [[ -n "${SSL_CERT_PATH}" || -n "${SSL_KEY_PATH}" ]]; then
+    return
+  fi
+
+  local answer=""
+  read -r -p "未找到默认证书，是否从你自己的证书路径读取？[y/N]: " answer
+  case "${answer}" in
+    y|Y|yes|YES)
+      prompt_value SSL_CERT_PATH "请输入 fullchain.pem 证书文件路径"
+      prompt_value SSL_KEY_PATH "请输入 privkey.pem 私钥文件路径"
+      ;;
+  esac
+}
+
 write_site_config() {
   SITE_CONFIG_ACTIVE=0
   validate_domain "${DOMAIN}"
@@ -666,6 +995,8 @@ write_site_config() {
 
   mkdir -p "${cert_dir}"
   chmod 700 "${cert_dir}"
+  prompt_custom_cert_paths_if_needed "${cert_dir}"
+  import_custom_cert_files "${cert_dir}"
   set_cert_permissions "${cert_dir}"
 
   local target="${active_conf}"
@@ -758,6 +1089,7 @@ run_install() {
   validate_flag START_AFTER_INSTALL "${START_AFTER_INSTALL}"
   validate_flag INSTALL_3XUI "${INSTALL_3XUI}"
   validate_flag INSTALL_CLIPROXY "${INSTALL_CLIPROXY}"
+  validate_flag INSTALL_SKRBTSO "${INSTALL_SKRBTSO}"
   validate_flag OVERWRITE "${OVERWRITE}"
   validate_port HTTP_PORT "${HTTP_PORT}"
   validate_port HTTPS_PORT "${HTTPS_PORT}"
@@ -787,6 +1119,10 @@ run_install() {
 
   if is_truthy "${INSTALL_CLIPROXY}"; then
     install_cli_proxy
+  fi
+
+  if is_truthy "${INSTALL_SKRBTSO}"; then
+    install_skrbtso
   fi
 
   print_summary
@@ -855,6 +1191,15 @@ down_cli_proxy() {
   fi
 }
 
+down_skrbtso() {
+  if compose_file_exists "$(skrbtso_compose_file)"; then
+    skrbtso_compose_cmd down
+    log "SkrBTSo Helper 容器已停止并移除，数据仍保留在：${SKRBTSO_DIR}"
+  else
+    warn "未找到 SkrBTSo Helper Compose 文件：$(skrbtso_compose_file)"
+  fi
+}
+
 show_all_status() {
   install_docker_engine
   echo
@@ -875,6 +1220,11 @@ show_all_status() {
     echo
     echo "---------------- CLIProxyAPI ----------------"
     cli_proxy_compose_cmd ps
+  fi
+  if compose_file_exists "$(skrbtso_compose_file)"; then
+    echo
+    echo "---------------- SkrBTSo Helper ----------------"
+    skrbtso_compose_cmd ps
   fi
 }
 
@@ -898,6 +1248,9 @@ update_all_components() {
   if compose_file_exists "$(cli_proxy_compose_file)"; then
     update_cli_proxy
   fi
+  if compose_file_exists "$(skrbtso_compose_file)"; then
+    update_skrbtso
+  fi
 }
 
 confirm_action() {
@@ -917,13 +1270,14 @@ print_menu() {
 1) 安装基础环境 + Nginx 反向代理
 2) 安装 3x-ui
 3) 安装 CLIProxyAPI
-4) 全套安装：Nginx 反代 + 3x-ui + CLIProxyAPI
+4) 安装 SkrBTSo Helper
 5) 添加 HTTPS 反代站点
 6) 查看所有容器状态
 7) 更新所有已安装容器镜像
 8) 停止/卸载 Nginx 反代容器（保留配置和证书）
 9) 停止/卸载 3x-ui 容器（保留数据）
 10) 停止/卸载 CLIProxyAPI 容器（保留配置和日志）
+11) 停止/卸载 SkrBTSo Helper 容器（保留数据）
 0) 退出
 ================================================
 EOF
@@ -939,6 +1293,7 @@ run_menu() {
         CREATE_SITE="${CREATE_SITE:-0}"
         INSTALL_3XUI=0
         INSTALL_CLIPROXY=0
+        INSTALL_SKRBTSO=0
         run_install
         ;;
       2)
@@ -948,10 +1303,7 @@ run_menu() {
         install_cli_proxy
         ;;
       4)
-        CREATE_SITE="${CREATE_SITE:-0}"
-        INSTALL_3XUI=1
-        INSTALL_CLIPROXY=1
-        run_install
+        install_skrbtso
         ;;
       5)
         run_add_site
@@ -975,6 +1327,11 @@ run_menu() {
       10)
         if confirm_action "确认停止/卸载 CLIProxyAPI 容器？数据会保留"; then
           down_cli_proxy
+        fi
+        ;;
+      11)
+        if confirm_action "确认停止/卸载 SkrBTSo Helper 容器？数据会保留"; then
+          down_skrbtso
         fi
         ;;
       0)
@@ -1012,7 +1369,70 @@ EOF
 
 }
 
+write_xui_install_info() {
+  local existing_db="${1:-0}"
+  local info_file
+  info_file="$(xui_info_file)"
+
+  if [[ -f "${info_file}" ]] && ! is_truthy "${OVERWRITE}"; then
+    chmod 600 "${info_file}" 2>/dev/null || true
+    warn "3x-ui 安装信息文件已存在，保持不变：${info_file}（如需覆盖请设置 OVERWRITE=1）"
+    return
+  fi
+
+  local server_ip url_host panel_url account password note
+  server_ip="$(detect_server_ip)"
+  url_host="$(format_url_host "${server_ip}")"
+  panel_url="http://${url_host}:${XUI_PANEL_PORT}"
+
+  account="admin"
+  password="admin"
+  note="这是 Docker 全新数据目录的默认账号密码，首次登录后请立即修改。"
+  if [[ "${existing_db}" -eq 1 ]]; then
+    account="已有数据库，可能已被修改"
+    password="已有数据库，可能已被修改"
+    note="脚本检测到 ${XUI_DIR}/db/x-ui.db 已存在，不会读取或覆盖你之前修改过的账号密码。"
+  fi
+
+  write_file "${info_file}" <<EOF
+3x-ui 安装信息
+生成时间: $(date '+%Y-%m-%d %H:%M:%S %z')
+
+面板登录地址: ${panel_url}
+面板端口: ${XUI_PANEL_PORT}
+用户名: ${account}
+密码: ${password}
+
+安装目录: ${XUI_DIR}
+容器名称: ${XUI_CONTAINER_NAME}
+镜像: ${XUI_IMAGE}
+Compose 文件: ${XUI_DIR}/docker-compose.yml
+数据目录: ${XUI_DIR}/db
+证书目录: ${XUI_DIR}/cert
+
+说明: ${note}
+安全组/防火墙: 如果要从公网访问面板，需要放行 TCP ${XUI_PANEL_PORT}。
+EOF
+  chmod 600 "${info_file}"
+}
+
 print_xui_summary() {
+  local existing_db="${1:-0}"
+  local server_ip url_host panel_url info_file account password note
+  server_ip="$(detect_server_ip)"
+  url_host="$(format_url_host "${server_ip}")"
+  panel_url="http://${url_host}:${XUI_PANEL_PORT}"
+  info_file="$(xui_info_file)"
+
+  account="admin"
+  password="admin"
+  note="Docker 全新数据目录默认账号密码如下，首次登录后立即修改。"
+  if [[ "${existing_db}" -eq 1 ]]; then
+    account="已有数据库，可能已被修改"
+    password="已有数据库，可能已被修改"
+    note="检测到已有 3x-ui 数据库，账号密码以你之前修改后的为准。"
+  fi
+
   cat <<EOF
 
 ==================== 3X-UI ======================
@@ -1023,12 +1443,15 @@ Compose 文件  : ${XUI_DIR}/docker-compose.yml
 数据目录      : ${XUI_DIR}/db
 证书目录      : ${XUI_DIR}/cert
 网络模式      : host
-默认面板      : http://服务器IP:${XUI_PANEL_PORT}
-默认账号      : admin
-默认密码      : admin
+面板登录地址  : ${panel_url}
+面板端口      : ${XUI_PANEL_PORT}
+用户名        : ${account}
+密码          : ${password}
+安装信息保存  : ${info_file}
 
 重要事项:
-  首次登录后立即修改默认账号、密码、面板路径和面板端口。
+  ${note}
+  如果打不开登录地址，请先确认云服务器安全组/防火墙已放行 TCP ${XUI_PANEL_PORT}。
   3x-ui 使用 host 网络，面板端口和你在面板里创建的入站端口都直接占用宿主机端口。
 
 常用命令:
@@ -1064,6 +1487,32 @@ API Key       : ${CLI_PROXY_API_KEY}
   cd ${CLI_PROXY_DIR}
   docker compose up -d
   docker compose pull && docker compose up -d
+  docker compose logs -f
+=================================================
+EOF
+}
+
+print_skrbtso_summary() {
+  cat <<EOF
+
+================ SKRBTSO HELPER ================
+安装目录      : ${SKRBTSO_DIR}
+仓库目录      : ${SKRBTSO_DIR}/repo
+容器名称      : ${SKRBTSO_CONTAINER_NAME}
+镜像          : ${SKRBTSO_IMAGE}
+Compose 文件  : ${SKRBTSO_DIR}/docker-compose.yml
+浏览器资料    : ${SKRBTSO_DIR}/skrbtso-browser
+本机监听      : http://${SKRBTSO_BIND_IP}:${SKRBTSO_PORT}
+域名          : ${SKRBTSO_DOMAIN:-未配置}
+Token         : ${SKRBTSO_TOKEN}
+
+浏览器脚本设置:
+  抓取服务地址：https://${SKRBTSO_DOMAIN:-你的域名}/skrbtso/search
+  Bearer token：上面的 Token
+
+常用命令:
+  cd ${SKRBTSO_DIR}
+  docker compose up -d --build
   docker compose logs -f
 =================================================
 EOF
@@ -1121,6 +1570,26 @@ main() {
     cli-proxy-up)
       need_root
       cli_proxy_compose_cmd up -d
+      ;;
+    install-skrbtso)
+      need_root
+      install_skrbtso
+      ;;
+    update-skrbtso)
+      need_root
+      update_skrbtso
+      ;;
+    skrbtso-status)
+      need_root
+      skrbtso_compose_cmd ps
+      ;;
+    skrbtso-down)
+      need_root
+      down_skrbtso
+      ;;
+    skrbtso-up)
+      need_root
+      skrbtso_compose_cmd up -d
       ;;
     add-site)
       need_root
