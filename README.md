@@ -132,6 +132,10 @@ Docker 全新数据目录的默认账号和密码是 `admin` / `admin`。如果 
 
 首次登录后必须立即修改默认账号、默认密码、面板路径和面板端口。3x-ui 使用 host 网络，面板端口和你在面板里创建的入站端口都会直接占用宿主机端口。脚本不会自动放行这些端口，你需要按实际端口手动放行本机防火墙和云安全组。
 
+如果服务器之前安装过宿主机版 3x-ui（`/usr/local/x-ui/x-ui` 或 `x-ui.service`），脚本会在安装 Docker 版前提示是否停用旧版，避免旧版占用 `2096` 等端口导致 Docker 容器反复重启。非交互安装时可以设置 `XUI_STOP_LEGACY=1` 自动停用旧版；如果保留旧版，请设置 `XUI_STOP_LEGACY=0` 并自行处理端口冲突。
+
+安装和更新后，脚本会检查 3x-ui 容器状态和最近日志。如果发现 `bind: address already in use`，会直接提示冲突端口，并给出 `ss -lntp | grep ':端口'` 的排查命令。
+
 只安装 CLIProxyAPI：
 
 ```bash
@@ -402,6 +406,7 @@ sudo bash ./setup-ssh-key-login.sh help
 | `XUI_CONTAINER_NAME` | `3xui_app` | 3x-ui 容器名称 |
 | `XUI_PANEL_PORT` | `2053` | 3x-ui 默认面板端口 |
 | `XUI_INFO_FILE` | `/opt/3x-ui/install-info.txt` | 3x-ui 安装结果保存路径 |
+| `XUI_STOP_LEGACY` | `ask` | 发现宿主机版旧 3x-ui 时是否停用：`ask`、`1`、`0` |
 | `INSTALL_CLIPROXY` | `0` | `install` 时是否同时安装 CLIProxyAPI |
 | `CLI_PROXY_DIR` | `/opt/cli-proxy-api` | CLIProxyAPI Compose 项目目录 |
 | `CLI_PROXY_IMAGE` | `eceasy/cli-proxy-api:latest` | CLIProxyAPI Docker 镜像 |

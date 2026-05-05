@@ -16,6 +16,7 @@ XUI_IMAGE="${XUI_IMAGE:-ghcr.io/mhsanaei/3x-ui:latest}"
 XUI_CONTAINER_NAME="${XUI_CONTAINER_NAME:-3xui_app}"
 XUI_PANEL_PORT="${XUI_PANEL_PORT:-2053}"
 XUI_INFO_FILE="${XUI_INFO_FILE:-}"
+XUI_STOP_LEGACY="${XUI_STOP_LEGACY:-ask}"
 
 CLI_PROXY_DIR="${CLI_PROXY_DIR:-/opt/cli-proxy-api}"
 CLI_PROXY_IMAGE="${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:latest}"
@@ -107,6 +108,7 @@ Docker Nginx 反向代理一键脚本
   XUI_CONTAINER_NAME=3xui_app
   XUI_PANEL_PORT=2053
   XUI_INFO_FILE=/opt/3x-ui/install-info.txt
+  XUI_STOP_LEGACY=ask
   CLI_PROXY_DIR=/opt/cli-proxy-api
   CLI_PROXY_BIND_IP=127.0.0.1
   CLI_PROXY_API_PORT=8317
@@ -486,6 +488,102 @@ EOF
   chmod 644 "$(xui_compose_file)"
 }
 
+legacy_xui_pids() {
+  pgrep -f '/usr/local/x-ui/x-ui' 2>/dev/null || true
+}
+
+legacy_xui_running() {
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet x-ui 2>/dev/null; then
+    return 0
+  fi
+  [[ -n "$(legacy_xui_pids)" ]]
+}
+
+stop_legacy_xui() {
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl stop x-ui >/dev/null 2>&1 || true
+    systemctl disable x-ui >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$(legacy_xui_pids)" ]]; then
+    pkill -f '/usr/local/x-ui/x-ui' >/dev/null 2>&1 || true
+  fi
+  sleep 2
+  if legacy_xui_running; then
+    err "旧版宿主机 x-ui 仍在运行，请先手动停止：systemctl stop x-ui && pkill -f /usr/local/x-ui/x-ui"
+  fi
+  log "旧版宿主机 x-ui 已停止并禁用，避免与 Docker 版抢占端口"
+}
+
+handle_legacy_xui_before_install() {
+  if ! legacy_xui_running; then
+    return
+  fi
+
+  warn "检测到旧版宿主机 3x-ui 正在运行：/usr/local/x-ui/x-ui"
+  warn "如果同时安装 Docker 版 3x-ui，旧版可能占用 2096 等入站端口，导致 Docker 容器反复重启。"
+
+  case "${XUI_STOP_LEGACY}" in
+    1|true|TRUE|yes|YES|y|Y)
+      stop_legacy_xui
+      ;;
+    0|false|FALSE|no|NO|n|N)
+      warn "已按 XUI_STOP_LEGACY=${XUI_STOP_LEGACY} 保留旧版宿主机 x-ui；如端口冲突，请手动处理。"
+      ;;
+    ask|"")
+      if [[ -t 0 ]]; then
+        if confirm_action "是否停止并禁用旧版宿主机 x-ui.service，再启动 Docker 版 3x-ui？"; then
+          stop_legacy_xui
+        else
+          err "已取消安装。请先处理旧版宿主机 x-ui，或设置 XUI_STOP_LEGACY=1 自动停用旧版。"
+        fi
+      else
+        err "检测到旧版宿主机 x-ui 正在运行。非交互执行请设置 XUI_STOP_LEGACY=1 停用旧版，或先手动处理端口冲突。"
+      fi
+      ;;
+    *)
+      err "XUI_STOP_LEGACY 只能使用 ask/0/1/true/false：${XUI_STOP_LEGACY}"
+      ;;
+  esac
+}
+
+xui_container_state() {
+  docker inspect -f '{{.State.Status}} {{.State.Restarting}}' "${XUI_CONTAINER_NAME}" 2>/dev/null || true
+}
+
+check_xui_container_health() {
+  local state logs conflict_ports port
+  sleep 3
+  state="$(xui_container_state)"
+  logs="$(docker logs --tail=120 "${XUI_CONTAINER_NAME}" 2>&1 || true)"
+  conflict_ports="$(printf '%s\n' "${logs}" | sed -nE 's/.*listen tcp .*:([0-9]+): bind: address already in use.*/\1/p' | sort -n -u | xargs 2>/dev/null || true)"
+
+  if [[ -z "${state}" || "${state}" != "running false" || -n "${conflict_ports}" ]]; then
+    warn "3x-ui 容器启动异常。当前状态：${state:-unknown}"
+    if [[ -n "${conflict_ports}" ]]; then
+      for port in ${conflict_ports}; do
+        warn "冲突端口：${port}/tcp"
+        if command -v ss >/dev/null 2>&1; then
+          ss -lntp | grep ":${port}" || true
+        fi
+      done
+    fi
+    cat <<EOF
+
+处理建议:
+  1. 查看占用端口的程序：ss -lntp | grep ':端口'
+  2. 如果是旧版宿主机 x-ui：systemctl stop x-ui && systemctl disable x-ui
+  3. 如果是 3x-ui 里已有入站端口冲突，请进入面板或数据库把重复端口改掉
+  4. 修改后重启：cd ${XUI_DIR} && docker compose up -d
+
+最近日志:
+$(printf '%s\n' "${logs}" | tail -n 25)
+EOF
+    err "3x-ui 容器未健康启动，请先处理上面的端口冲突"
+  fi
+
+  log "3x-ui 容器健康检查通过：${state}"
+}
+
 install_xui() {
   validate_flag INSTALL_DOCKER "${INSTALL_DOCKER}"
   validate_flag OVERWRITE "${OVERWRITE}"
@@ -498,11 +596,13 @@ install_xui() {
 
   run_system_upgrade_once
   install_docker_engine
+  handle_legacy_xui_before_install
   ensure_xui_layout
   write_xui_compose_file
   xui_compose_cmd up -d
 
   log "3x-ui 容器已启动：${XUI_CONTAINER_NAME}"
+  check_xui_container_health
   write_xui_install_info "${existing_db}"
   print_xui_summary "${existing_db}"
 }
@@ -516,6 +616,7 @@ update_xui() {
   xui_compose_cmd pull
   xui_compose_cmd up -d
   log "3x-ui 镜像已更新并重启"
+  check_xui_container_health
 }
 
 ensure_cli_proxy_layout() {
