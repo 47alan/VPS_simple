@@ -51,7 +51,6 @@ START_AFTER_INSTALL="${START_AFTER_INSTALL:-1}"
 INSTALL_3XUI="${INSTALL_3XUI:-0}"
 INSTALL_CLIPROXY="${INSTALL_CLIPROXY:-0}"
 INSTALL_SKRBTSO="${INSTALL_SKRBTSO:-0}"
-OPEN_LOCAL_FIREWALL="${OPEN_LOCAL_FIREWALL:-1}"
 OVERWRITE="${OVERWRITE:-0}"
 
 COMMAND="${1:-install}"
@@ -103,7 +102,6 @@ Docker Nginx 反向代理一键脚本
   INSTALL_3XUI=0
   INSTALL_CLIPROXY=0
   INSTALL_SKRBTSO=0
-  OPEN_LOCAL_FIREWALL=1
   XUI_DIR=/opt/3x-ui
   XUI_IMAGE=ghcr.io/mhsanaei/3x-ui:latest
   XUI_CONTAINER_NAME=3xui_app
@@ -226,38 +224,6 @@ format_url_host() {
   else
     printf '%s\n' "${value}"
   fi
-}
-
-open_local_firewall_port() {
-  local port="$1"
-  local label="${2:-服务}"
-  local opened=0
-
-  validate_port FIREWALL_PORT "${port}"
-
-  if ! is_truthy "${OPEN_LOCAL_FIREWALL}"; then
-    warn "已跳过本机防火墙放行：OPEN_LOCAL_FIREWALL=${OPEN_LOCAL_FIREWALL}"
-    return
-  fi
-
-  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
-    ufw allow "${port}/tcp"
-    log "UFW 已放行 ${label}：${port}/tcp"
-    opened=1
-  fi
-
-  if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-    firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null
-    firewall-cmd --reload >/dev/null
-    log "firewalld 已放行 ${label}：${port}/tcp"
-    opened=1
-  fi
-
-  if [[ "${opened}" -eq 0 ]]; then
-    warn "未检测到启用的 UFW/firewalld，未修改本机防火墙；如系统使用其他防火墙，请手动放行 ${port}/tcp"
-  fi
-
-  warn "云厂商安全组/防火墙无法由脚本自动修改，请在云控制台确认已放行 ${port}/tcp"
 }
 
 validate_flag() {
@@ -522,7 +488,6 @@ EOF
 
 install_xui() {
   validate_flag INSTALL_DOCKER "${INSTALL_DOCKER}"
-  validate_flag OPEN_LOCAL_FIREWALL "${OPEN_LOCAL_FIREWALL}"
   validate_flag OVERWRITE "${OVERWRITE}"
   validate_port XUI_PANEL_PORT "${XUI_PANEL_PORT}"
 
@@ -538,7 +503,6 @@ install_xui() {
   xui_compose_cmd up -d
 
   log "3x-ui 容器已启动：${XUI_CONTAINER_NAME}"
-  open_local_firewall_port "${XUI_PANEL_PORT}" "3x-ui 面板"
   write_xui_install_info "${existing_db}"
   print_xui_summary "${existing_db}"
 }
@@ -1126,7 +1090,6 @@ run_install() {
   validate_flag INSTALL_3XUI "${INSTALL_3XUI}"
   validate_flag INSTALL_CLIPROXY "${INSTALL_CLIPROXY}"
   validate_flag INSTALL_SKRBTSO "${INSTALL_SKRBTSO}"
-  validate_flag OPEN_LOCAL_FIREWALL "${OPEN_LOCAL_FIREWALL}"
   validate_flag OVERWRITE "${OVERWRITE}"
   validate_port HTTP_PORT "${HTTP_PORT}"
   validate_port HTTPS_PORT "${HTTPS_PORT}"
@@ -1448,8 +1411,7 @@ Compose 文件: ${XUI_DIR}/docker-compose.yml
 证书目录: ${XUI_DIR}/cert
 
 说明: ${note}
-本机防火墙: OPEN_LOCAL_FIREWALL=${OPEN_LOCAL_FIREWALL}，脚本会尝试自动放行 UFW/firewalld 的 TCP ${XUI_PANEL_PORT}。
-云安全组: 如果要从公网访问面板，仍需要在云厂商控制台放行 TCP ${XUI_PANEL_PORT}。
+端口放行: 如果要从公网访问面板，请按当前面板端口手动放行本机防火墙和云安全组的 TCP ${XUI_PANEL_PORT}。
 EOF
   chmod 600 "${info_file}"
 }
@@ -1489,8 +1451,7 @@ Compose 文件  : ${XUI_DIR}/docker-compose.yml
 
 重要事项:
   ${note}
-  脚本会尝试自动放行服务器本机 UFW/firewalld 的 TCP ${XUI_PANEL_PORT}。
-  如果仍打不开登录地址，请在云厂商安全组/防火墙里放行 TCP ${XUI_PANEL_PORT}。
+  如果打不开登录地址，请按当前面板端口手动放行本机防火墙和云安全组的 TCP ${XUI_PANEL_PORT}。
   3x-ui 使用 host 网络，面板端口和你在面板里创建的入站端口都直接占用宿主机端口。
 
 常用命令:

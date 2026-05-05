@@ -130,9 +130,7 @@ sudo bash /tmp/reverse-proxy-install.sh install-3x-ui
 
 Docker 全新数据目录的默认账号和密码是 `admin` / `admin`。如果 `/opt/3x-ui/db/x-ui.db` 已经存在，脚本不会读取或覆盖你之前修改过的账号密码，会提示以旧信息为准。
 
-脚本默认会尝试自动放行服务器本机 UFW/firewalld 的 `2053/tcp`。云厂商安全组不能由脚本自动修改，所以还需要在云控制台手动放行 `2053/tcp`。如果你不想让脚本改本机防火墙，执行时加 `OPEN_LOCAL_FIREWALL=0`。
-
-首次登录后必须立即修改默认账号、默认密码、面板路径和面板端口。3x-ui 使用 host 网络，你在面板里创建的入站端口会直接占用宿主机端口，这些入站端口也需要同步放行本机防火墙和云安全组。
+首次登录后必须立即修改默认账号、默认密码、面板路径和面板端口。3x-ui 使用 host 网络，面板端口和你在面板里创建的入站端口都会直接占用宿主机端口。脚本不会自动放行这些端口，你需要按实际端口手动放行本机防火墙和云安全组。
 
 只安装 CLIProxyAPI：
 
@@ -398,7 +396,6 @@ sudo bash ./setup-ssh-key-login.sh help
 | `HTTP_PORT` | `80` | 宿主机 HTTP 端口 |
 | `HTTPS_PORT` | `443` | 宿主机 HTTPS 端口 |
 | `SYSTEM_UPGRADE` | `1` | 安装前是否执行 `apt-get update/upgrade` |
-| `OPEN_LOCAL_FIREWALL` | `1` | 是否尝试自动放行本机 UFW/firewalld 端口 |
 | `INSTALL_3XUI` | `0` | `install` 时是否同时安装 3x-ui |
 | `XUI_DIR` | `/opt/3x-ui` | 3x-ui Compose 项目目录 |
 | `XUI_IMAGE` | `ghcr.io/mhsanaei/3x-ui:latest` | 3x-ui Docker 镜像 |

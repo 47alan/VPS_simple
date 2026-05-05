@@ -7,15 +7,13 @@ Const INSTALL_URL = "https://raw.githubusercontent.com/47alan/VPS_simple/main/in
 
 Const XUI_DIR = "/opt/3x-ui"
 Const XUI_CONTAINER_NAME = "3xui_app"
-Const OPEN_LOCAL_FIREWALL = "1"
 
 Sub Main()
     xsh.Screen.Synchronous = True
 
     Dim envPart
     envPart = "XUI_DIR='" & XUI_DIR & "' " & _
-              "XUI_CONTAINER_NAME='" & XUI_CONTAINER_NAME & "' " & _
-              "OPEN_LOCAL_FIREWALL='" & OPEN_LOCAL_FIREWALL & "'"
+              "XUI_CONTAINER_NAME='" & XUI_CONTAINER_NAME & "'"
 
     Dim cmd
     cmd = "set -e; " & _
